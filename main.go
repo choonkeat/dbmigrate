@@ -20,6 +20,13 @@ import (
 	_ "github.com/lib/pq"
 )
 
+const (
+	sqlCreateVersionsTable    = `CREATE TABLE dbmigrate_versions (version text NOT NULL PRIMARY KEY)`
+	sqlSelectExistingVersions = `SELECT version FROM dbmigrate_versions ORDER BY version ASC`
+	sqlInsertNewVersion       = `INSERT INTO dbmigrate_versions (version) VALUES ($1)`
+	sqlDeleteOldVersion       = `DELETE FROM dbmigrate_versions WHERE version = $1`
+)
+
 var (
 	operationCreate bool
 	operationUp     bool
@@ -50,11 +57,11 @@ func _main() error {
 	// 1. CREATE new migration; exit
 	if operationCreate {
 		description := strings.Join(flag.Args(), " ")
-		name := newName(time.Now(), description)
+		name := versionedName(time.Now(), description)
 		if err := os.MkdirAll(dirname, 0755); err != nil {
 			return errors.Wrapf(err, "failed to create -dirname %q", dirname)
 		}
-		if err := writeFile(dirname, name, ``, ``); err != nil {
+		if err := writeFile(dirname, name); err != nil {
 			return errors.Wrapf(err, "failed to write into -dirname %q", dirname)
 		}
 		return nil
@@ -111,13 +118,9 @@ func _main() error {
 }
 
 func existingVersions(ctx context.Context, db *sql.DB) (*trie.Trie, error) {
-	// best effort create before we select
-	_, _ = db.ExecContext(ctx, `
-		CREATE TABLE dbmigrate_versions (
-			version text NOT NULL PRIMARY KEY
-		);
-	`)
-	rows, err := db.QueryContext(ctx, "SELECT version FROM dbmigrate_versions ORDER BY version ASC")
+	// best effort create before we select; if the table is not there, next query will fail anyway
+	_, _ = db.ExecContext(ctx, sqlCreateVersionsTable)
+	rows, err := db.QueryContext(ctx, sqlSelectExistingVersions)
 	if err != nil {
 		return nil, err
 	}
@@ -139,21 +142,22 @@ func migrateUp(ctx context.Context, tx *sql.Tx, dirname string, ascFiles []os.Fi
 		currFile := ascFiles[i]
 		currName := currFile.Name()
 		if !strings.HasSuffix(currName, ".up.sql") {
-			continue
+			continue // skip if this isn't a `.up.sql`
 		}
 		currVer := strings.Split(currName, "_")[0]
 		if _, found := migratedVersions.Find(currVer); found {
-			continue
+			continue // skip if we've migrated this version
 		}
 
-		query, err := ioutil.ReadFile(path.Join(dirname, currName))
+		// read the file, run the sql and insert a row into `dbmigrate_versions`
+		filecontent, err := ioutil.ReadFile(path.Join(dirname, currName))
 		if err != nil {
 			return errors.Wrapf(err, currName)
 		}
-		if _, err := tx.ExecContext(ctx, string(query)); err != nil {
+		if _, err := tx.ExecContext(ctx, string(filecontent)); err != nil {
 			return errors.Wrapf(err, currName)
 		}
-		if _, err := tx.ExecContext(ctx, "INSERT INTO dbmigrate_versions (version) VALUES ($1)", currVer); err != nil {
+		if _, err := tx.ExecContext(ctx, sqlInsertNewVersion, currVer); err != nil {
 			return errors.Wrapf(err, "fail to register version %q", currVer)
 		}
 		log.Println("[up]", currName)
@@ -167,25 +171,26 @@ func migrateDown(ctx context.Context, tx *sql.Tx, dirname string, downStep int, 
 		currFile := descFiles[i]
 		currName := currFile.Name()
 		if !strings.HasSuffix(currName, ".down.sql") {
-			continue
+			continue // skip if this isn't a `.down.sql`
 		}
 		currVer := strings.Split(currName, "_")[0]
 		if _, found := migratedVersions.Find(currVer); !found {
-			continue
+			continue // skip if we've NOT migrated this version
 		}
-
 		counted++
 		if counted > downStep {
-			break
+			break // time to stop
 		}
-		query, err := ioutil.ReadFile(path.Join(dirname, currName))
+
+		// read the file, run the sql and delete row from `dbmigrate_versions`
+		filecontent, err := ioutil.ReadFile(path.Join(dirname, currName))
 		if err != nil {
 			return errors.Wrapf(err, currName)
 		}
-		if _, err := tx.ExecContext(ctx, string(query)); err != nil {
+		if _, err := tx.ExecContext(ctx, string(filecontent)); err != nil {
 			return errors.Wrapf(err, currName)
 		}
-		if _, err := tx.ExecContext(ctx, "DELETE FROM dbmigrate_versions WHERE version = $1", currVer); err != nil {
+		if _, err := tx.ExecContext(ctx, sqlDeleteOldVersion, currVer); err != nil {
 			return errors.Wrapf(err, "fail to unregister version %q", currVer)
 		}
 		log.Println("[down]", currName)
@@ -198,7 +203,7 @@ var (
 	sanitize      = regexp.MustCompile(`\W+`)
 )
 
-func newName(now time.Time, description string) string {
+func versionedName(now time.Time, description string) string {
 	s := sanitize.ReplaceAllString(strings.ToLower(description), replaceString)
 	return fmt.Sprintf("%s_%s",
 		now.UTC().Format("20060102150405"),
@@ -206,13 +211,13 @@ func newName(now time.Time, description string) string {
 	)
 }
 
-func writeFile(dirname, name, upsql, downsql string) error {
+func writeFile(dirname, name string) error {
 	upfile, downfile := path.Join(dirname, name+".up.sql"), path.Join(dirname, name+".down.sql")
 	log.Println("writing", upfile)
-	err := ioutil.WriteFile(upfile, []byte(upsql), 0644)
+	err := ioutil.WriteFile(upfile, []byte(nil), 0644)
 	if err != nil {
 		return err
 	}
 	log.Println("writing", downfile)
-	return ioutil.WriteFile(downfile, []byte(downsql), 0644)
+	return ioutil.WriteFile(downfile, []byte(nil), 0644)
 }
