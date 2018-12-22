@@ -10,7 +10,7 @@ $ dbmigrate -create describe your change
 2018/12/21 16:33:13 writing db/migrations/20181221083313_describe-your-change.down.sql
 ```
 
-generate a pair of blank `.up.sql` and `.down.sql` files inside the directory `db/migrations`. configure the directory with `-dirname` command line flag.
+generate a pair of blank `.up.sql` and `.down.sql` files inside the directory `db/migrations`. configure the directory with `-dir` command line flag.
 
 the numeric prefix of the filename is the `version`. i.e. the version of the file above is `20181221083313`
 
