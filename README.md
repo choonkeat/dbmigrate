@@ -78,6 +78,8 @@ DATABASE_DRIVER=postgres
 DATABASE_URL='user=pqgotest dbname=pqgotest sslmode=verify-full'
 ```
 
+> NOTE: out of the box, this driver supports having multiple statements in one `.sql` file.
+
 **MySQL**
 
 We're using [github.com/go-sql-driver/mysql](https://github.com/go-sql-driver/mysql#examples) so environment variables look like
@@ -86,6 +88,14 @@ We're using [github.com/go-sql-driver/mysql](https://github.com/go-sql-driver/my
 DATABASE_DRIVER=mysql
 DATABASE_URL='user:password@tcp(127.0.0.1:3306)/dbmigrate_test'
 ```
+
+> NOTE: to have multiple SQL statements in each `.sql` file, you'd need to add `multiStatements=true` to the CGI query string of your `DATABASE_URL`. i.e.
+>
+> ```
+> DATABASE_URL='user:password@tcp(127.0.0.1:3306)/dbmigrate_test?multiStatements=true'
+> ```
+>
+> See the [driver documentation](https://github.com/go-sql-driver/mysql#multistatements) for details and other available options.
 
 ## Handling failure
 
