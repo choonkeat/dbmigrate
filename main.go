@@ -30,7 +30,7 @@ type dbAdapter struct {
 
 var adapters = map[string]dbAdapter{
 	"postgres": dbAdapter{
-		sqlCreateVersionsTable:    `CREATE TABLE dbmigrate_versions (version text NOT NULL PRIMARY KEY)`,
+		sqlCreateVersionsTable:    `CREATE TABLE dbmigrate_versions (version char(14) NOT NULL PRIMARY KEY)`,
 		sqlSelectExistingVersions: `SELECT version FROM dbmigrate_versions ORDER BY version ASC`,
 		sqlInsertNewVersion:       `INSERT INTO dbmigrate_versions (version) VALUES ($1)`,
 		sqlDeleteOldVersion:       `DELETE FROM dbmigrate_versions WHERE version = $1`,
