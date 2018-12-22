@@ -62,7 +62,7 @@ func main() {
 
 func _main() error {
 	// options
-	flag.BoolVar(&operationCreate, "create", false, "add new migration files into -dirname")
+	flag.BoolVar(&operationCreate, "create", false, "add new migration files into -dir")
 	flag.BoolVar(&operationUp, "up", false, "perform migrations in sequence")
 	flag.IntVar(&downStep, "down", 0, "undo the last N migrations")
 	flag.StringVar(&dirname, "dir", "db/migrations", "directory storing all the *.sql files")
@@ -76,10 +76,10 @@ func _main() error {
 		description := strings.Join(flag.Args(), " ")
 		name := versionedName(time.Now(), description)
 		if err := os.MkdirAll(dirname, 0755); err != nil {
-			return errors.Wrapf(err, "failed to create -dirname %q", dirname)
+			return errors.Wrapf(err, "failed to create -dir %q", dirname)
 		}
 		if err := writeFile(dirname, name); err != nil {
-			return errors.Wrapf(err, "failed to write into -dirname %q", dirname)
+			return errors.Wrapf(err, "failed to write into -dir %q", dirname)
 		}
 		return nil
 	}
