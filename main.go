@@ -86,7 +86,8 @@ func _main() error {
 
 	// ensure db and driverName is legit
 	if driverName == "" {
-		// most of the time, the driver name is the `scheme` part of the url
+		// fall back to use the `scheme` part of the url as driverName
+		// e.g. `postgres://localhost:5432/dbmigrate_test` will thus be `postgres`
 		driverName = strings.Split(databaseURL, ":")[0]
 	}
 	var ok bool
