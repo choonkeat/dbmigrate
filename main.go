@@ -17,15 +17,31 @@ import (
 	"github.com/derekparker/trie"
 	"github.com/pkg/errors"
 
+	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/lib/pq"
 )
 
-const (
-	sqlCreateVersionsTable    = `CREATE TABLE dbmigrate_versions (version text NOT NULL PRIMARY KEY)`
-	sqlSelectExistingVersions = `SELECT version FROM dbmigrate_versions ORDER BY version ASC`
-	sqlInsertNewVersion       = `INSERT INTO dbmigrate_versions (version) VALUES ($1)`
-	sqlDeleteOldVersion       = `DELETE FROM dbmigrate_versions WHERE version = $1`
-)
+type dbAdapter struct {
+	sqlCreateVersionsTable    string
+	sqlSelectExistingVersions string
+	sqlInsertNewVersion       string
+	sqlDeleteOldVersion       string
+}
+
+var adapters = map[string]dbAdapter{
+	"postgres": dbAdapter{
+		sqlCreateVersionsTable:    `CREATE TABLE dbmigrate_versions (version text NOT NULL PRIMARY KEY)`,
+		sqlSelectExistingVersions: `SELECT version FROM dbmigrate_versions ORDER BY version ASC`,
+		sqlInsertNewVersion:       `INSERT INTO dbmigrate_versions (version) VALUES ($1)`,
+		sqlDeleteOldVersion:       `DELETE FROM dbmigrate_versions WHERE version = $1`,
+	},
+	"mysql": dbAdapter{
+		sqlCreateVersionsTable:    `CREATE TABLE dbmigrate_versions (version char(14) NOT NULL PRIMARY KEY)`,
+		sqlSelectExistingVersions: `SELECT version FROM dbmigrate_versions ORDER BY version ASC`,
+		sqlInsertNewVersion:       `INSERT INTO dbmigrate_versions (version) VALUES (?)`,
+		sqlDeleteOldVersion:       `DELETE FROM dbmigrate_versions WHERE version = ?`,
+	},
+}
 
 var (
 	operationCreate bool
@@ -35,6 +51,7 @@ var (
 	databaseURL     string
 	driverName      string
 	timeout         time.Duration
+	adapter         dbAdapter
 )
 
 func main() {
@@ -71,6 +88,11 @@ func _main() error {
 	if driverName == "" {
 		// most of the time, the driver name is the `scheme` part of the url
 		driverName = strings.Split(databaseURL, ":")[0]
+	}
+	var ok bool
+	adapter, ok = adapters[driverName]
+	if !ok {
+		return errors.Errorf("unsupported driver name %q", driverName)
 	}
 	db, err := sql.Open(driverName, databaseURL)
 	if err != nil {
@@ -119,8 +141,8 @@ func _main() error {
 
 func existingVersions(ctx context.Context, db *sql.DB) (*trie.Trie, error) {
 	// best effort create before we select; if the table is not there, next query will fail anyway
-	_, _ = db.ExecContext(ctx, sqlCreateVersionsTable)
-	rows, err := db.QueryContext(ctx, sqlSelectExistingVersions)
+	_, _ = db.ExecContext(ctx, adapter.sqlCreateVersionsTable)
+	rows, err := db.QueryContext(ctx, adapter.sqlSelectExistingVersions)
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +179,7 @@ func migrateUp(ctx context.Context, tx *sql.Tx, dirname string, ascFiles []os.Fi
 		if _, err := tx.ExecContext(ctx, string(filecontent)); err != nil {
 			return errors.Wrapf(err, currName)
 		}
-		if _, err := tx.ExecContext(ctx, sqlInsertNewVersion, currVer); err != nil {
+		if _, err := tx.ExecContext(ctx, adapter.sqlInsertNewVersion, currVer); err != nil {
 			return errors.Wrapf(err, "fail to register version %q", currVer)
 		}
 		log.Println("[up]", currName)
@@ -190,7 +212,7 @@ func migrateDown(ctx context.Context, tx *sql.Tx, dirname string, downStep int, 
 		if _, err := tx.ExecContext(ctx, string(filecontent)); err != nil {
 			return errors.Wrapf(err, currName)
 		}
-		if _, err := tx.ExecContext(ctx, sqlDeleteOldVersion, currVer); err != nil {
+		if _, err := tx.ExecContext(ctx, adapter.sqlDeleteOldVersion, currVer); err != nil {
 			return errors.Wrapf(err, "fail to unregister version %q", currVer)
 		}
 		log.Println("[down]", currName)
