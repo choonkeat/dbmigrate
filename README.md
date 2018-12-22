@@ -76,3 +76,17 @@ $ dbmigrate -up
 $ dbmigrate -up
 $
 ```
+
+### DDL Transactions
+
+**PostgreSQL** supports rollback for most DDL
+
+> one of the more advanced features of PostgreSQL is its ability to perform transactional DDL via its Write-Ahead Log design. This design supports backing out even large changes to DDL, such as table creation. You can't recover from an add/drop on a database or tablespace, but all other catalog operations are reversible.
+> https://wiki.postgresql.org/wiki/Transactional_DDL_in_PostgreSQL:_A_Competitive_Analysis
+
+**MySQL** does not support rollback for DDL
+
+> Some statements cannot be rolled back. In general, these include data definition language (DDL) statements, such as those that create or drop databases, those that create, drop, or alter tables or stored routines.
+> https://dev.mysql.com/doc/refman/8.0/en/cannot-roll-back.html
+
+If you're using MySQL, make sure to have DDL (e.g. `CREATE TABLE ...`) in their individual `*.sql` files
