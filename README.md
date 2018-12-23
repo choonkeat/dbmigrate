@@ -1,6 +1,6 @@
 # dbmigrate
 
-`rails migrate` inspired design
+`rails migrate` inspired approach to database schema migrations but with plain sql files. and much faster.
 
 ### Create a new migration
 
@@ -59,6 +59,17 @@ $ dbmigrate -down 3
 2018/12/21 16:46:45 [down] 20181221083313_describe-your-change.down.sql
 2018/12/21 16:46:45 [down] 20181221055307_create-users.down.sql
 2018/12/21 16:46:45 [down] 20181221055304_create-projects.down.sql
+```
+
+### Show versions pending
+
+Prints a sorted list of versions found in `-dir` but does not have a record in `dbmigrate_versions` table.
+
+```
+$ dbmigrate -versions-pending
+20181222073750
+20181222073900
+20181222073901
 ```
 
 ### Configuring `DATABASE_URL`
@@ -124,3 +135,11 @@ $
 > https://dev.mysql.com/doc/refman/8.0/en/cannot-roll-back.html
 
 If you're using MySQL, make sure to have DDL (e.g. `CREATE TABLE ...`) in their individual `*.sql` files.
+
+## Demo
+
+[![asciicast](https://asciinema.org/a/11onajScFBZFAutBwB8K4RENl.svg)](https://asciinema.org/a/11onajScFBZFAutBwB8K4RENl)
+
+Running integration tests with postgres, mariadb, and mysql
+
+[![asciicast](https://asciinema.org/a/E8ifl4p5v6lL44f6lRd4r1bed.svg)](https://asciinema.org/a/E8ifl4p5v6lL44f6lRd4r1bed)

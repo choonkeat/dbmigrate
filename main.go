@@ -51,6 +51,7 @@ var (
 	databaseURL     string
 	driverName      string
 	timeout         time.Duration
+	versionsPending bool
 	adapter         dbAdapter
 )
 
@@ -68,6 +69,7 @@ func _main() error {
 	flag.StringVar(&dirname, "dir", "db/migrations", "directory storing all the *.sql files")
 	flag.StringVar(&databaseURL, "url", os.Getenv("DATABASE_URL"), "connection string to database, e.g. postgres://user:pass@host:5432/myproject_development")
 	flag.StringVar(&driverName, "driver", os.Getenv("DATABASE_DRIVER"), "drivername, e.g. postgres")
+	flag.BoolVar(&versionsPending, "versions-pending", false, "show versions in `-dir` but not applied in `-url` database")
 	flag.DurationVar(&timeout, "timeout", time.Minute, "database timeout")
 	flag.Parse()
 
@@ -111,12 +113,21 @@ func _main() error {
 	if err != nil {
 		return errors.Wrapf(err, "unable to read from -dir %q", dirname)
 	}
+
+	// 2. SHOW pending versions
+	if versionsPending {
+		sort.SliceStable(migrationFiles, func(i int, j int) bool {
+			return strings.Compare(migrationFiles[i].Name(), migrationFiles[j].Name()) == -1
+		})
+		return showVersionsPending(ctx, migrationFiles, migratedVersions)
+	}
+
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return errors.Wrapf(err, "unable to create transaction")
 	}
 
-	// 2. MIGRATE UP or DOWN; exit
+	// 3. MIGRATE UP or DOWN; exit
 	if operationUp {
 		sort.SliceStable(migrationFiles, func(i int, j int) bool {
 			return strings.Compare(migrationFiles[i].Name(), migrationFiles[j].Name()) == -1
@@ -137,7 +148,7 @@ func _main() error {
 		return tx.Commit()
 	}
 
-	return errors.Errorf("no operation: must be either `-create`, `-up`, or `-down 1`")
+	return errors.Errorf("no operation: must be either `-create`, `versions-pending`, `-up`, or `-down 1`")
 }
 
 func existingVersions(ctx context.Context, db *sql.DB) (*trie.Trie, error) {
@@ -158,6 +169,22 @@ func existingVersions(ctx context.Context, db *sql.DB) (*trie.Trie, error) {
 		result.Add(s, 1)
 	}
 	return result, nil
+}
+
+func showVersionsPending(ctx context.Context, ascFiles []os.FileInfo, migratedVersions *trie.Trie) error {
+	for i := range ascFiles {
+		currFile := ascFiles[i]
+		currName := currFile.Name()
+		if !strings.HasSuffix(currName, ".up.sql") {
+			continue // skip if this isn't a `.up.sql`
+		}
+		currVer := strings.Split(currName, "_")[0]
+		if _, found := migratedVersions.Find(currVer); found {
+			continue // skip if we've migrated this version
+		}
+		fmt.Println(currVer)
+	}
+	return nil
 }
 
 func migrateUp(ctx context.Context, tx *sql.Tx, dirname string, ascFiles []os.FileInfo, migratedVersions *trie.Trie) error {
