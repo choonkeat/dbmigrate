@@ -21,38 +21,16 @@ import (
 	_ "github.com/lib/pq"
 )
 
-type dbAdapter struct {
-	sqlCreateVersionsTable    string
-	sqlSelectExistingVersions string
-	sqlInsertNewVersion       string
-	sqlDeleteOldVersion       string
-}
-
-var adapters = map[string]dbAdapter{
-	"postgres": dbAdapter{
-		sqlCreateVersionsTable:    `CREATE TABLE dbmigrate_versions (version char(14) NOT NULL PRIMARY KEY)`,
-		sqlSelectExistingVersions: `SELECT version FROM dbmigrate_versions ORDER BY version ASC`,
-		sqlInsertNewVersion:       `INSERT INTO dbmigrate_versions (version) VALUES ($1)`,
-		sqlDeleteOldVersion:       `DELETE FROM dbmigrate_versions WHERE version = $1`,
-	},
-	"mysql": dbAdapter{
-		sqlCreateVersionsTable:    `CREATE TABLE dbmigrate_versions (version char(14) NOT NULL PRIMARY KEY)`,
-		sqlSelectExistingVersions: `SELECT version FROM dbmigrate_versions ORDER BY version ASC`,
-		sqlInsertNewVersion:       `INSERT INTO dbmigrate_versions (version) VALUES (?)`,
-		sqlDeleteOldVersion:       `DELETE FROM dbmigrate_versions WHERE version = ?`,
-	},
-}
-
 var (
-	operationCreate bool
-	operationUp     bool
-	downStep        int
-	dirname         string
-	databaseURL     string
-	driverName      string
-	timeout         time.Duration
-	versionsPending bool
-	adapter         dbAdapter
+	doCreateMigration bool
+	doPendingVersions bool
+	doMigrateUp       bool
+	doMigrateDown     int
+	dirname           string
+	databaseURL       string
+	driverName        string
+	timeout           time.Duration
+	adapter           dbAdapter
 )
 
 func main() {
@@ -63,18 +41,26 @@ func main() {
 
 func _main() error {
 	// options
-	flag.BoolVar(&operationCreate, "create", false, "add new migration files into -dir")
-	flag.BoolVar(&operationUp, "up", false, "perform migrations in sequence")
-	flag.IntVar(&downStep, "down", 0, "undo the last N migrations")
-	flag.StringVar(&dirname, "dir", "db/migrations", "directory storing all the *.sql files")
-	flag.StringVar(&databaseURL, "url", os.Getenv("DATABASE_URL"), "connection string to database, e.g. postgres://user:pass@host:5432/myproject_development")
-	flag.StringVar(&driverName, "driver", os.Getenv("DATABASE_DRIVER"), "drivername, e.g. postgres")
-	flag.BoolVar(&versionsPending, "versions-pending", false, "show versions in `-dir` but not applied in `-url` database")
-	flag.DurationVar(&timeout, "timeout", time.Minute, "database timeout")
+	flag.BoolVar(&doCreateMigration,
+		"create", false, "add new migration files into -dir")
+	flag.BoolVar(&doPendingVersions,
+		"versions-pending", false, "show versions in `-dir` but not applied in `-url` database")
+	flag.BoolVar(&doMigrateUp,
+		"up", false, "perform migrations in sequence")
+	flag.IntVar(&doMigrateDown,
+		"down", 0, "undo the last N applied migrations")
+	flag.StringVar(&dirname,
+		"dir", "db/migrations", "directory storing all the *.sql files")
+	flag.StringVar(&databaseURL,
+		"url", os.Getenv("DATABASE_URL"), "connection string to database, e.g. postgres://user:pass@host:5432/myproject_development")
+	flag.StringVar(&driverName,
+		"driver", os.Getenv("DATABASE_DRIVER"), "drivername, e.g. postgres")
+	flag.DurationVar(&timeout,
+		"timeout", 5*time.Minute, "database timeout")
 	flag.Parse()
 
 	// 1. CREATE new migration; exit
-	if operationCreate {
+	if doCreateMigration {
 		description := strings.Join(flag.Args(), " ")
 		name := versionedName(time.Now(), description)
 		if err := os.MkdirAll(dirname, 0755); err != nil {
@@ -115,7 +101,7 @@ func _main() error {
 	}
 
 	// 2. SHOW pending versions
-	if versionsPending {
+	if doPendingVersions {
 		sort.SliceStable(migrationFiles, func(i int, j int) bool {
 			return strings.Compare(migrationFiles[i].Name(), migrationFiles[j].Name()) == -1
 		})
@@ -127,8 +113,8 @@ func _main() error {
 		return errors.Wrapf(err, "unable to create transaction")
 	}
 
-	// 3. MIGRATE UP or DOWN; exit
-	if operationUp {
+	// 3. MIGRATE UP or MIGRATE DOWN; exit
+	if doMigrateUp {
 		sort.SliceStable(migrationFiles, func(i int, j int) bool {
 			return strings.Compare(migrationFiles[i].Name(), migrationFiles[j].Name()) == -1
 		})
@@ -137,18 +123,19 @@ func _main() error {
 			return err
 		}
 		return tx.Commit()
-	} else if downStep > 0 {
+	} else if doMigrateDown > 0 {
 		sort.SliceStable(migrationFiles, func(i int, j int) bool {
 			return strings.Compare(migrationFiles[i].Name(), migrationFiles[j].Name()) == 1
 		})
-		if err = migrateDown(ctx, tx, dirname, downStep, migrationFiles, migratedVersions); err != nil {
+		if err = migrateDown(ctx, tx, dirname, doMigrateDown, migrationFiles, migratedVersions); err != nil {
 			tx.Rollback()
 			return err
 		}
 		return tx.Commit()
 	}
 
-	return errors.Errorf("no operation: must be either `-create`, `versions-pending`, `-up`, or `-down 1`")
+	// None of the above, fail
+	return errors.Errorf("no operation: must be either `-create`, `-versions-pending`, `-up`, or `-down 1`")
 }
 
 func existingVersions(ctx context.Context, db *sql.DB) (*trie.Trie, error) {
@@ -270,4 +257,26 @@ func writeFile(dirname, name string) error {
 	}
 	log.Println("writing", downfile)
 	return ioutil.WriteFile(downfile, []byte(nil), 0644)
+}
+
+type dbAdapter struct {
+	sqlCreateVersionsTable    string
+	sqlSelectExistingVersions string
+	sqlInsertNewVersion       string
+	sqlDeleteOldVersion       string
+}
+
+var adapters = map[string]dbAdapter{
+	"postgres": dbAdapter{
+		sqlCreateVersionsTable:    `CREATE TABLE dbmigrate_versions (version char(14) NOT NULL PRIMARY KEY)`,
+		sqlSelectExistingVersions: `SELECT version FROM dbmigrate_versions ORDER BY version ASC`,
+		sqlInsertNewVersion:       `INSERT INTO dbmigrate_versions (version) VALUES ($1)`,
+		sqlDeleteOldVersion:       `DELETE FROM dbmigrate_versions WHERE version = $1`,
+	},
+	"mysql": dbAdapter{
+		sqlCreateVersionsTable:    `CREATE TABLE dbmigrate_versions (version char(14) NOT NULL PRIMARY KEY)`,
+		sqlSelectExistingVersions: `SELECT version FROM dbmigrate_versions ORDER BY version ASC`,
+		sqlInsertNewVersion:       `INSERT INTO dbmigrate_versions (version) VALUES (?)`,
+		sqlDeleteOldVersion:       `DELETE FROM dbmigrate_versions WHERE version = ?`,
+	},
 }
