@@ -4,4 +4,4 @@ test: build
 	); done
 
 build:
-	go build .
+	go build ./cmd/dbmigrate
