@@ -156,7 +156,7 @@ func existingVersions(ctx context.Context, db *sql.DB) (*trie.Trie, error) {
 		if err := rows.Scan(&s); err != nil {
 			return nil, err
 		}
-		result.Add(s, 1)
+		result.Add(strings.TrimSpace(s), 1)
 	}
 	return result, nil
 }
