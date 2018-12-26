@@ -10,11 +10,10 @@ import (
 	"os"
 	"path"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 
-	"github.com/derekparker/trie"
+	"github.com/choonkeat/dbmigrate"
 	"github.com/pkg/errors"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -30,7 +29,6 @@ var (
 	databaseURL       string
 	driverName        string
 	timeout           time.Duration
-	adapter           dbAdapter
 )
 
 func main() {
@@ -72,170 +70,37 @@ func _main() error {
 		return nil
 	}
 
-	// ensure db and driverName is legit
-	databaseURL = strings.TrimSpace(databaseURL)
-	if databaseURL == "" {
-		log.Fatalln("either `-url` command line flag or DATABASE_URL environment variable must be set. see `--help` for more details.")
-	}
-	if driverName == "" {
-		// fall back to use the `scheme` part of the url as driverName
-		// e.g. `postgres://localhost:5432/dbmigrate_test` will thus be `postgres`
-		driverName = strings.Split(databaseURL, ":")[0]
-	}
-	var ok bool
-	adapter, ok = adapters[driverName]
-	if !ok {
-		return errors.Errorf("unsupported driver name %q", driverName)
-	}
-	db, err := sql.Open(driverName, databaseURL)
+	m, err := dbmigrate.New(dirname, driverName, databaseURL)
 	if err != nil {
-		return errors.Wrapf(err, "unable to connect to -url")
+		return err
 	}
-	defer db.Close()
+	defer m.CloseDB()
+
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	migratedVersions, err := existingVersions(ctx, db)
-	if err != nil {
-		return errors.Wrapf(err, "unable to query existing versions")
-	}
-	migrationFiles, err := ioutil.ReadDir(dirname)
-	if err != nil {
-		return errors.Wrapf(err, "unable to read from -dir %q", dirname)
-	}
-
 	// 2. SHOW pending versions; exit
 	if doPendingVersions {
-		sort.SliceStable(migrationFiles, func(i int, j int) bool {
-			return strings.Compare(migrationFiles[i].Name(), migrationFiles[j].Name()) == -1
-		})
-		return showVersionsPending(ctx, migrationFiles, migratedVersions)
+		versions, err := m.PendingVersions(ctx)
+		if err != nil {
+			return err
+		}
+		fmt.Println(strings.Join(versions, "\n"))
+		return nil
 	}
 
-	tx, err := db.BeginTx(ctx, &sql.TxOptions{})
-	if err != nil {
-		return errors.Wrapf(err, "unable to create transaction")
-	}
-	defer tx.Rollback() // ok to fail rollback if we did `tx.Commit`
-
-	// 3. MIGRATE UP or MIGRATE DOWN; exit
+	// 3. MIGRATE UP; exit
 	if doMigrateUp {
-		sort.SliceStable(migrationFiles, func(i int, j int) bool {
-			return strings.Compare(migrationFiles[i].Name(), migrationFiles[j].Name()) == -1
-		})
-		if err = migrateUp(ctx, tx, dirname, migrationFiles, migratedVersions); err != nil {
-			return err
-		}
-		return tx.Commit()
-	} else if doMigrateDown > 0 {
-		sort.SliceStable(migrationFiles, func(i int, j int) bool {
-			return strings.Compare(migrationFiles[i].Name(), migrationFiles[j].Name()) == 1
-		})
-		if err = migrateDown(ctx, tx, dirname, doMigrateDown, migrationFiles, migratedVersions); err != nil {
-			return err
-		}
-		return tx.Commit()
+		return m.MigrateUp(ctx, &sql.TxOptions{})
+	}
+
+	// 4. MIGRATE DOWN; exit
+	if doMigrateDown > 0 {
+		return m.MigrateDown(ctx, &sql.TxOptions{}, doMigrateDown)
 	}
 
 	// None of the above, fail
 	return errors.Errorf("no operation: must be either `-create`, `-versions-pending`, `-up`, or `-down 1`")
-}
-
-func existingVersions(ctx context.Context, db *sql.DB) (*trie.Trie, error) {
-	// best effort create before we select; if the table is not there, next query will fail anyway
-	_, _ = db.ExecContext(ctx, adapter.sqlCreateVersionsTable)
-	rows, err := db.QueryContext(ctx, adapter.sqlSelectExistingVersions)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	result := trie.New()
-	for rows.Next() {
-		var s string
-		if err := rows.Scan(&s); err != nil {
-			return nil, err
-		}
-		result.Add(strings.TrimSpace(s), 1)
-	}
-	return result, nil
-}
-
-func showVersionsPending(ctx context.Context, ascFiles []os.FileInfo, migratedVersions *trie.Trie) error {
-	for i := range ascFiles {
-		currFile := ascFiles[i]
-		currName := currFile.Name()
-		if !strings.HasSuffix(currName, ".up.sql") {
-			continue // skip if this isn't a `.up.sql`
-		}
-		currVer := strings.Split(currName, "_")[0]
-		if _, found := migratedVersions.Find(currVer); found {
-			continue // skip if we've migrated this version
-		}
-		fmt.Println(currVer)
-	}
-	return nil
-}
-
-func migrateUp(ctx context.Context, tx *sql.Tx, dirname string, ascFiles []os.FileInfo, migratedVersions *trie.Trie) error {
-	for i := range ascFiles {
-		currFile := ascFiles[i]
-		currName := currFile.Name()
-		if !strings.HasSuffix(currName, ".up.sql") {
-			continue // skip if this isn't a `.up.sql`
-		}
-		currVer := strings.Split(currName, "_")[0]
-		if _, found := migratedVersions.Find(currVer); found {
-			continue // skip if we've migrated this version
-		}
-
-		// read the file, run the sql and insert a row into `dbmigrate_versions`
-		filecontent, err := ioutil.ReadFile(path.Join(dirname, currName))
-		if err != nil {
-			return errors.Wrapf(err, currName)
-		}
-		if _, err := tx.ExecContext(ctx, string(filecontent)); err != nil {
-			return errors.Wrapf(err, currName)
-		}
-		if _, err := tx.ExecContext(ctx, adapter.sqlInsertNewVersion, currVer); err != nil {
-			return errors.Wrapf(err, "fail to register version %q", currVer)
-		}
-		log.Println("[up]", currName)
-	}
-	return nil
-}
-
-func migrateDown(ctx context.Context, tx *sql.Tx, dirname string, downStep int, descFiles []os.FileInfo, migratedVersions *trie.Trie) error {
-	counted := 0
-	for i := range descFiles {
-		currFile := descFiles[i]
-		currName := currFile.Name()
-		if !strings.HasSuffix(currName, ".down.sql") {
-			continue // skip if this isn't a `.down.sql`
-		}
-		currVer := strings.Split(currName, "_")[0]
-		if _, found := migratedVersions.Find(currVer); !found {
-			continue // skip if we've NOT migrated this version
-		}
-		counted++
-		if counted > downStep {
-			break // time to stop
-		}
-
-		// read the file, run the sql and delete row from `dbmigrate_versions`
-		filecontent, err := ioutil.ReadFile(path.Join(dirname, currName))
-		if err != nil {
-			return errors.Wrapf(err, currName)
-		}
-		if _, err := tx.ExecContext(ctx, string(filecontent)); err != nil {
-			return errors.Wrapf(err, currName)
-		}
-		if _, err := tx.ExecContext(ctx, adapter.sqlDeleteOldVersion, currVer); err != nil {
-			return errors.Wrapf(err, "fail to unregister version %q", currVer)
-		}
-		log.Println("[down]", currName)
-	}
-	return nil
 }
 
 var (
@@ -260,26 +125,4 @@ func writeFile(dirname, name string) error {
 	}
 	log.Println("writing", downfile)
 	return ioutil.WriteFile(downfile, []byte(nil), 0644)
-}
-
-type dbAdapter struct {
-	sqlCreateVersionsTable    string
-	sqlSelectExistingVersions string
-	sqlInsertNewVersion       string
-	sqlDeleteOldVersion       string
-}
-
-var adapters = map[string]dbAdapter{
-	"postgres": dbAdapter{
-		sqlCreateVersionsTable:    `CREATE TABLE dbmigrate_versions (version char(14) NOT NULL PRIMARY KEY)`,
-		sqlSelectExistingVersions: `SELECT version FROM dbmigrate_versions ORDER BY version ASC`,
-		sqlInsertNewVersion:       `INSERT INTO dbmigrate_versions (version) VALUES ($1)`,
-		sqlDeleteOldVersion:       `DELETE FROM dbmigrate_versions WHERE version = $1`,
-	},
-	"mysql": dbAdapter{
-		sqlCreateVersionsTable:    `CREATE TABLE dbmigrate_versions (version char(14) NOT NULL PRIMARY KEY)`,
-		sqlSelectExistingVersions: `SELECT version FROM dbmigrate_versions ORDER BY version ASC`,
-		sqlInsertNewVersion:       `INSERT INTO dbmigrate_versions (version) VALUES (?)`,
-		sqlDeleteOldVersion:       `DELETE FROM dbmigrate_versions WHERE version = ?`,
-	},
 }
