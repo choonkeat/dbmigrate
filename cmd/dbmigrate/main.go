@@ -91,16 +91,22 @@ func _main() error {
 
 	// 3. MIGRATE UP; exit
 	if doMigrateUp {
-		return m.MigrateUp(ctx, &sql.TxOptions{})
+		return m.MigrateUp(ctx, &sql.TxOptions{}, filenameLogger("[up]"))
 	}
 
 	// 4. MIGRATE DOWN; exit
 	if doMigrateDown > 0 {
-		return m.MigrateDown(ctx, &sql.TxOptions{}, doMigrateDown)
+		return m.MigrateDown(ctx, &sql.TxOptions{}, filenameLogger("[down]"), doMigrateDown)
 	}
 
 	// None of the above, fail
 	return errors.Errorf("no operation: must be either `-create`, `-versions-pending`, `-up`, or `-down 1`")
+}
+
+func filenameLogger(prefix string) func(string) {
+	return func(s string) {
+		log.Println(prefix, s)
+	}
 }
 
 var (

@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"io/ioutil"
-	"log"
 	"os"
 	"path"
 	"sort"
@@ -111,7 +110,7 @@ func (c *Config) PendingVersions(ctx context.Context) ([]string, error) {
 }
 
 // MigrateUp applies pending migrations in ascending order
-func (c *Config) MigrateUp(ctx context.Context, txOpts *sql.TxOptions) error {
+func (c *Config) MigrateUp(ctx context.Context, txOpts *sql.TxOptions, logFilename func(string)) error {
 	migratedVersions, err := c.existingVersions(ctx)
 	if err != nil {
 		return errors.Wrapf(err, "unable to query existing versions")
@@ -150,13 +149,13 @@ func (c *Config) MigrateUp(ctx context.Context, txOpts *sql.TxOptions) error {
 		if _, err := tx.ExecContext(ctx, c.adapter.sqlInsertNewVersion, currVer); err != nil {
 			return errors.Wrapf(err, "fail to register version %q", currVer)
 		}
-		log.Println("[up]", currName)
+		logFilename(currName)
 	}
 	return tx.Commit()
 }
 
 // MigrateDown un-apply up to N migrations in descending order
-func (c *Config) MigrateDown(ctx context.Context, txOpts *sql.TxOptions, downStep int) error {
+func (c *Config) MigrateDown(ctx context.Context, txOpts *sql.TxOptions, logFilename func(string), downStep int) error {
 	migratedVersions, err := c.existingVersions(ctx)
 	if err != nil {
 		return errors.Wrapf(err, "unable to query existing versions")
@@ -200,7 +199,7 @@ func (c *Config) MigrateDown(ctx context.Context, txOpts *sql.TxOptions, downSte
 		if _, err := tx.ExecContext(ctx, c.adapter.sqlDeleteOldVersion, currVer); err != nil {
 			return errors.Wrapf(err, "fail to unregister version %q", currVer)
 		}
-		log.Println("[down]", currName)
+		logFilename(currName)
 	}
 	return tx.Commit()
 }
