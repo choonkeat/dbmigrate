@@ -5,7 +5,7 @@ set -e
 source `dirname $0`/lib.sh
 
 # setup
-DBMIGRATE_CMD='go run main.go'
+DBMIGRATE_CMD='./dbmigrate'
 DB_MIGRATIONS_DIR=tests/db/migrations
 
 trap finish EXIT
@@ -28,13 +28,13 @@ echo 'SELECT 1;' > ${DB_MIGRATIONS_DIR}/*_finally-do-nothing.down.sql
 
 # `-up` should fail; but recoverable later
 cp tests/db/${DATABASE_DRIVER}/{20181222073546,20181222073750,20181222073901}_* ${DB_MIGRATIONS_DIR}
-sed -i .original -e 's/price/xpricex/g' ${DB_MIGRATIONS_DIR}/20181222073901_change-product-price-to-int.*.sql
+sed -i.original -e 's/price/xpricex/g' ${DB_MIGRATIONS_DIR}/20181222073901_change-product-price-to-int.*.sql
 assert_equal "tests/db/${DATABASE_DRIVER}/VERSIONS-01.before-fail" "${PENDING_VERSIONS}" ${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -versions-pending
 assert_fail "should fail with bad migration" ${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -up 2>/dev/null
 assert_equal "tests/db/${DATABASE_DRIVER}/VERSIONS-02.after-fail" "${PENDING_VERSIONS}" ${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -versions-pending
 
 # retrying a fixed migration should work
-sed -i .original -e 's/xpricex/price/g' ${DB_MIGRATIONS_DIR}/20181222073901_change-product-price-to-int.*.sql
+sed -i.original -e 's/xpricex/price/g' ${DB_MIGRATIONS_DIR}/20181222073901_change-product-price-to-int.*.sql
 assert "should retry fixed migration and succeed" ${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -up 2>/dev/null
 assert_equal "tests/db/${DATABASE_DRIVER}/VERSIONS-03.after-fix-retry" "" ${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -versions-pending
 
