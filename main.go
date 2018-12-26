@@ -73,6 +73,10 @@ func _main() error {
 	}
 
 	// ensure db and driverName is legit
+	databaseURL = strings.TrimSpace(databaseURL)
+	if databaseURL == "" {
+		log.Fatalln("either `-url` command line flag or DATABASE_URL environment variable must be set. see `--help` for more details.")
+	}
 	if driverName == "" {
 		// fall back to use the `scheme` part of the url as driverName
 		// e.g. `postgres://localhost:5432/dbmigrate_test` will thus be `postgres`
@@ -100,7 +104,7 @@ func _main() error {
 		return errors.Wrapf(err, "unable to read from -dir %q", dirname)
 	}
 
-	// 2. SHOW pending versions
+	// 2. SHOW pending versions; exit
 	if doPendingVersions {
 		sort.SliceStable(migrationFiles, func(i int, j int) bool {
 			return strings.Compare(migrationFiles[i].Name(), migrationFiles[j].Name()) == -1
