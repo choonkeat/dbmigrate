@@ -116,6 +116,7 @@ func _main() error {
 	if err != nil {
 		return errors.Wrapf(err, "unable to create transaction")
 	}
+	defer tx.Rollback() // ok to fail rollback if we did `tx.Commit`
 
 	// 3. MIGRATE UP or MIGRATE DOWN; exit
 	if doMigrateUp {
@@ -123,7 +124,6 @@ func _main() error {
 			return strings.Compare(migrationFiles[i].Name(), migrationFiles[j].Name()) == -1
 		})
 		if err = migrateUp(ctx, tx, dirname, migrationFiles, migratedVersions); err != nil {
-			tx.Rollback()
 			return err
 		}
 		return tx.Commit()
@@ -132,7 +132,6 @@ func _main() error {
 			return strings.Compare(migrationFiles[i].Name(), migrationFiles[j].Name()) == 1
 		})
 		if err = migrateDown(ctx, tx, dirname, doMigrateDown, migrationFiles, migratedVersions); err != nil {
-			tx.Rollback()
 			return err
 		}
 		return tx.Commit()
