@@ -13,7 +13,7 @@ import (
 	"github.com/pkg/errors"
 )
 
-// Config to perform dbmigrate
+// A Config holds on to an open database to perform dbmigrate
 type Config struct {
 	dir            http.FileSystem
 	db             *sql.DB
@@ -21,7 +21,12 @@ type Config struct {
 	migrationFiles []os.FileInfo
 }
 
-// New instance of Config to perform dbmigrate
+// New returns an instance of &Config
+//
+// Returns error when
+// - database driver is unsupported (try adding support via `dbmigrate.Register`)
+// - database fails to connect or retrieve existing versions
+// - unable to read list of files from `dir`
 func New(dir http.FileSystem, driverName string, databaseURL string) (*Config, error) {
 	// ensure db and driverName is legit
 	databaseURL = strings.TrimSpace(databaseURL)
@@ -62,7 +67,7 @@ func New(dir http.FileSystem, driverName string, databaseURL string) (*Config, e
 	}, nil
 }
 
-// CloseDB closes DB
+// CloseDB should be run when Config is no longer in use; ideally `defer CloseDB` after every `New`
 func (c *Config) CloseDB() error {
 	return c.db.Close()
 }
@@ -115,7 +120,10 @@ func (c *Config) PendingVersions(ctx context.Context) ([]string, error) {
 	return result, nil
 }
 
-// MigrateUp applies pending migrations in ascending order
+// MigrateUp applies pending migrations in ascending order, in a transaction
+//
+// Transaction is committed on success, rollback on error. Different databases will behave
+// differently, e.g. postgres & sqlite3 can rollback DDL changes but mysql cannot
 func (c *Config) MigrateUp(ctx context.Context, txOpts *sql.TxOptions, logFilename func(string)) error {
 	migratedVersions, err := c.existingVersions(ctx)
 	if err != nil {
@@ -161,7 +169,10 @@ func (c *Config) MigrateUp(ctx context.Context, txOpts *sql.TxOptions, logFilena
 	return tx.Commit()
 }
 
-// MigrateDown un-apply up to N migrations in descending order
+// MigrateDown un-applies at most N migrations in descending order, in a transaction
+//
+// Transaction is committed on success, rollback on error. Different databases will behave
+// differently, e.g. postgres & sqlite3 can rollback DDL changes but mysql cannot
 func (c *Config) MigrateDown(ctx context.Context, txOpts *sql.TxOptions, logFilename func(string), downStep int) error {
 	migratedVersions, err := c.existingVersions(ctx)
 	if err != nil {
@@ -221,7 +232,10 @@ func (c *Config) fileContent(currName string) ([]byte, error) {
 	return ioutil.ReadAll(f)
 }
 
-// Register a new adapter
+// Register a new adapter.
+//
+// NOTE that postgres and mysql is supported out of the box.
+// sqlite3 is supported by including cmd/dbmigrate/sqlite3.go during compilation
 func Register(name string, value Adapter) {
 	adapters[name] = value
 }
