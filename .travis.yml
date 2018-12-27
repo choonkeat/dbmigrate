@@ -5,3 +5,4 @@ services:
   - docker
 script:
   - env GO111MODULE=on make test
+  - env GO111MODULE=on make test BUILD_TARGET="./cmd/dbmigrate" DATABASE_DRIVERS=sqlite3

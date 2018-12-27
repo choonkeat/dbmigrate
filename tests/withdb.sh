@@ -38,6 +38,11 @@ case $DATABASE_DRIVER in
     env DATABASE_DRIVER=mysql DATABASE_URL="root:${DB_PASSWORD}@tcp(127.0.0.1:${PORT})/${DB_NAME}?multiStatements=true" DB_MIGRATIONS_DIR=${DB_MIGRATIONS_DIR} bash ${TARGET_SCRIPT}
     finish
     ;;
+    sqlite3)
+    rm -f "./tests/sqlite3.db"
+    env DATABASE_DRIVER=sqlite3 DATABASE_URL="./tests/sqlite3.db" DB_MIGRATIONS_DIR=${DB_MIGRATIONS_DIR} bash ${TARGET_SCRIPT}
+    rm -f "./tests/sqlite3.db"
+    ;;
     *)
     echo Unknown DATABASE_DRIVER=${DATABASE_DRIVER}
     exit 1

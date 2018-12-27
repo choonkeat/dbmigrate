@@ -17,7 +17,7 @@ import (
 type Config struct {
 	dir            http.FileSystem
 	db             *sql.DB
-	adapter        dbAdapter
+	adapter        Adapter
 	migrationFiles []os.FileInfo
 }
 
@@ -69,8 +69,8 @@ func (c *Config) CloseDB() error {
 
 func (c *Config) existingVersions(ctx context.Context) (*trie.Trie, error) {
 	// best effort create before we select; if the table is not there, next query will fail anyway
-	_, _ = c.db.ExecContext(ctx, c.adapter.sqlCreateVersionsTable)
-	rows, err := c.db.QueryContext(ctx, c.adapter.sqlSelectExistingVersions)
+	_, _ = c.db.ExecContext(ctx, c.adapter.CreateVersionsTable)
+	rows, err := c.db.QueryContext(ctx, c.adapter.SelectExistingVersions)
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +153,7 @@ func (c *Config) MigrateUp(ctx context.Context, txOpts *sql.TxOptions, logFilena
 		if _, err := tx.ExecContext(ctx, string(filecontent)); err != nil {
 			return errors.Wrapf(err, currName)
 		}
-		if _, err := tx.ExecContext(ctx, c.adapter.sqlInsertNewVersion, currVer); err != nil {
+		if _, err := tx.ExecContext(ctx, c.adapter.InsertNewVersion, currVer); err != nil {
 			return errors.Wrapf(err, "fail to register version %q", currVer)
 		}
 		logFilename(currName)
@@ -203,7 +203,7 @@ func (c *Config) MigrateDown(ctx context.Context, txOpts *sql.TxOptions, logFile
 		if _, err := tx.ExecContext(ctx, string(filecontent)); err != nil {
 			return errors.Wrapf(err, currName)
 		}
-		if _, err := tx.ExecContext(ctx, c.adapter.sqlDeleteOldVersion, currVer); err != nil {
+		if _, err := tx.ExecContext(ctx, c.adapter.DeleteOldVersion, currVer); err != nil {
 			return errors.Wrapf(err, "fail to unregister version %q", currVer)
 		}
 		logFilename(currName)
@@ -221,26 +221,30 @@ func (c *Config) fileContent(currName string) ([]byte, error) {
 	return ioutil.ReadAll(f)
 }
 
-//
-
-type dbAdapter struct {
-	sqlCreateVersionsTable    string
-	sqlSelectExistingVersions string
-	sqlInsertNewVersion       string
-	sqlDeleteOldVersion       string
+// Register a new adapter
+func Register(name string, value Adapter) {
+	adapters[name] = value
 }
 
-var adapters = map[string]dbAdapter{
-	"postgres": dbAdapter{
-		sqlCreateVersionsTable:    `CREATE TABLE dbmigrate_versions (version char(14) NOT NULL PRIMARY KEY)`,
-		sqlSelectExistingVersions: `SELECT version FROM dbmigrate_versions ORDER BY version ASC`,
-		sqlInsertNewVersion:       `INSERT INTO dbmigrate_versions (version) VALUES ($1)`,
-		sqlDeleteOldVersion:       `DELETE FROM dbmigrate_versions WHERE version = $1`,
+// Adapter defines raw sql statements to run for an sql.DB adapter
+type Adapter struct {
+	CreateVersionsTable    string
+	SelectExistingVersions string
+	InsertNewVersion       string
+	DeleteOldVersion       string
+}
+
+var adapters = map[string]Adapter{
+	"postgres": Adapter{
+		CreateVersionsTable:    `CREATE TABLE dbmigrate_versions (version char(14) NOT NULL PRIMARY KEY)`,
+		SelectExistingVersions: `SELECT version FROM dbmigrate_versions ORDER BY version ASC`,
+		InsertNewVersion:       `INSERT INTO dbmigrate_versions (version) VALUES ($1)`,
+		DeleteOldVersion:       `DELETE FROM dbmigrate_versions WHERE version = $1`,
 	},
-	"mysql": dbAdapter{
-		sqlCreateVersionsTable:    `CREATE TABLE dbmigrate_versions (version char(14) NOT NULL PRIMARY KEY)`,
-		sqlSelectExistingVersions: `SELECT version FROM dbmigrate_versions ORDER BY version ASC`,
-		sqlInsertNewVersion:       `INSERT INTO dbmigrate_versions (version) VALUES (?)`,
-		sqlDeleteOldVersion:       `DELETE FROM dbmigrate_versions WHERE version = ?`,
+	"mysql": Adapter{
+		CreateVersionsTable:    `CREATE TABLE dbmigrate_versions (version char(14) NOT NULL PRIMARY KEY)`,
+		SelectExistingVersions: `SELECT version FROM dbmigrate_versions ORDER BY version ASC`,
+		InsertNewVersion:       `INSERT INTO dbmigrate_versions (version) VALUES (?)`,
+		DeleteOldVersion:       `DELETE FROM dbmigrate_versions WHERE version = ?`,
 	},
 }
