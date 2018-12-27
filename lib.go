@@ -4,8 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"io/ioutil"
+	"net/http"
 	"os"
-	"path"
 	"sort"
 	"strings"
 
@@ -15,14 +15,14 @@ import (
 
 // Config to perform dbmigrate
 type Config struct {
-	dirname        string
+	dir            http.FileSystem
 	db             *sql.DB
 	adapter        dbAdapter
 	migrationFiles []os.FileInfo
 }
 
 // New instance of Config to perform dbmigrate
-func New(dirname string, driverName string, databaseURL string) (*Config, error) {
+func New(dir http.FileSystem, driverName string, databaseURL string) (*Config, error) {
 	// ensure db and driverName is legit
 	databaseURL = strings.TrimSpace(databaseURL)
 	if databaseURL == "" {
@@ -43,13 +43,19 @@ func New(dirname string, driverName string, databaseURL string) (*Config, error)
 		return nil, errors.Wrapf(err, "unable to connect to -url")
 	}
 
-	migrationFiles, err := ioutil.ReadDir(dirname)
+	f, err := dir.Open(".")
 	if err != nil {
-		return nil, errors.Wrapf(err, "unable to read from -dir %q", dirname)
+		return nil, errors.Wrapf(err, "unable to open directory %q", dir)
+	}
+	defer f.Close()
+
+	migrationFiles, err := f.Readdir(-1)
+	if err != nil {
+		return nil, errors.Wrapf(err, "unable to read from directory %q", dir)
 	}
 
 	return &Config{
-		dirname:        dirname,
+		dir:            dir,
 		db:             db,
 		adapter:        adapter,
 		migrationFiles: migrationFiles,
@@ -139,10 +145,11 @@ func (c *Config) MigrateUp(ctx context.Context, txOpts *sql.TxOptions, logFilena
 		}
 
 		// read the file, run the sql and insert a row into `dbmigrate_versions`
-		filecontent, err := ioutil.ReadFile(path.Join(c.dirname, currName))
+		filecontent, err := c.fileContent(currName)
 		if err != nil {
 			return errors.Wrapf(err, currName)
 		}
+
 		if _, err := tx.ExecContext(ctx, string(filecontent)); err != nil {
 			return errors.Wrapf(err, currName)
 		}
@@ -189,7 +196,7 @@ func (c *Config) MigrateDown(ctx context.Context, txOpts *sql.TxOptions, logFile
 		}
 
 		// read the file, run the sql and delete row from `dbmigrate_versions`
-		filecontent, err := ioutil.ReadFile(path.Join(c.dirname, currName))
+		filecontent, err := c.fileContent(currName)
 		if err != nil {
 			return errors.Wrapf(err, currName)
 		}
@@ -202,6 +209,16 @@ func (c *Config) MigrateDown(ctx context.Context, txOpts *sql.TxOptions, logFile
 		logFilename(currName)
 	}
 	return tx.Commit()
+}
+
+func (c *Config) fileContent(currName string) ([]byte, error) {
+	f, err := c.dir.Open(currName)
+	if err != nil {
+		return nil, errors.Wrapf(err, currName)
+	}
+	defer f.Close()
+
+	return ioutil.ReadAll(f)
 }
 
 //

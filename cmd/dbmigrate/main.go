@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"net/http"
 	"os"
 	"path"
 	"regexp"
@@ -70,7 +71,7 @@ func _main() error {
 		return nil
 	}
 
-	m, err := dbmigrate.New(dirname, driverName, databaseURL)
+	m, err := dbmigrate.New(http.Dir(dirname), driverName, databaseURL)
 	if err != nil {
 		return err
 	}
