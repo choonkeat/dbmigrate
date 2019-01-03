@@ -18,23 +18,17 @@ trap finish EXIT
 
 case $DATABASE_DRIVER in
     postgres)
-    docker run --rm -e POSTGRES_DB=${DB_NAME} -e POSTGRES_PASSWORD=${DB_PASSWORD} -p ${PORT}:5432 -d --cidfile cid.txt postgres
-    echo "waiting for ${DATABASE_DRIVER}...";
-    until docker exec -it `cat cid.txt` pg_isready; do sleep 3; done
+    docker run --rm -e POSTGRES_DB=${DB_NAME}dummy -e POSTGRES_PASSWORD=${DB_PASSWORD} -p ${PORT}:5432 -d --cidfile cid.txt postgres
     env DATABASE_DRIVER=${DATABASE_DRIVER} DATABASE_URL="postgres://postgres:${DB_PASSWORD}@localhost:${PORT}/${DB_NAME}?sslmode=disable" DB_MIGRATIONS_DIR=${DB_MIGRATIONS_DIR} bash ${TARGET_SCRIPT}
     finish
     ;;
     mysql)
-    docker run --rm -e MYSQL_DATABASE=${DB_NAME} -e MYSQL_ROOT_PASSWORD=${DB_PASSWORD} -p ${PORT}:3306 -d --cidfile cid.txt mysql --default-authentication-plugin=mysql_native_password
-    echo "waiting for ${DATABASE_DRIVER}...";
-    until docker exec -it `cat cid.txt` mysql -u root -p${DB_PASSWORD} --protocol TCP -e 'SELECT 1'; do sleep 3; done
+    docker run --rm -e MYSQL_DATABASE=${DB_NAME}dummy -e MYSQL_ROOT_PASSWORD=${DB_PASSWORD} -p ${PORT}:3306 -d --cidfile cid.txt mysql --default-authentication-plugin=mysql_native_password
     env DATABASE_DRIVER=${DATABASE_DRIVER} DATABASE_URL="root:${DB_PASSWORD}@tcp(127.0.0.1:${PORT})/${DB_NAME}?multiStatements=true" DB_MIGRATIONS_DIR=${DB_MIGRATIONS_DIR} bash ${TARGET_SCRIPT}
     finish
     ;;
     mariadb)
-    docker run --rm -e MYSQL_DATABASE=${DB_NAME} -e MYSQL_ROOT_PASSWORD=${DB_PASSWORD} -p ${PORT}:3306 -d --cidfile cid.txt mariadb
-    echo "waiting for ${DATABASE_DRIVER}...";
-    until docker exec -it `cat cid.txt` mysql -u root -p${DB_PASSWORD} --protocol TCP -e 'SELECT 1'; do sleep 3; done
+    docker run --rm -e MYSQL_DATABASE=${DB_NAME}dummy -e MYSQL_ROOT_PASSWORD=${DB_PASSWORD} -p ${PORT}:3306 -d --cidfile cid.txt mariadb
     env DATABASE_DRIVER=mysql DATABASE_URL="root:${DB_PASSWORD}@tcp(127.0.0.1:${PORT})/${DB_NAME}?multiStatements=true" DB_MIGRATIONS_DIR=${DB_MIGRATIONS_DIR} bash ${TARGET_SCRIPT}
     finish
     ;;

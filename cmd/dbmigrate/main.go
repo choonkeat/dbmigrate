@@ -22,6 +22,8 @@ import (
 )
 
 var (
+	serverReadyWait   time.Duration
+	doCreateDB        bool
 	doCreateMigration bool
 	doPendingVersions bool
 	doMigrateUp       bool
@@ -40,6 +42,10 @@ func main() {
 
 func _main() error {
 	// options
+	flag.DurationVar(&serverReadyWait,
+		"server-ready", 0, "wait until database server is ready, then continue")
+	flag.BoolVar(&doCreateDB,
+		"create-db", false, "create postgres database (ignore errors), then continue")
 	flag.BoolVar(&doCreateMigration,
 		"create", false, "add new migration files into -dir")
 	flag.BoolVar(&doPendingVersions,
@@ -71,12 +77,36 @@ func _main() error {
 		return nil
 	}
 
+	if doServerReadyWait := serverReadyWait > 0; doServerReadyWait || doCreateDB {
+		connString, dbName, err := dbmigrate.BaseDatabaseURL(driverName, databaseURL)
+		if err != nil {
+			return errors.Wrapf(err, "database url without dbname")
+		}
+
+		if doServerReadyWait {
+			ctx, cancel := context.WithTimeout(context.Background(), serverReadyWait)
+			defer cancel()
+			if err := dbmigrate.ReadyWait(ctx, driverName, connString, log.Println); err != nil {
+				return err
+			}
+		}
+
+		if doCreateDB {
+			db, err := sql.Open(driverName, connString)
+			if err != nil {
+				return errors.Wrapf(err, "connect to db")
+			}
+			// leave errors for subsequent actions
+			_, _ = db.Exec("CREATE DATABASE " + dbName)
+			_ = db.Close()
+		}
+	}
+
 	m, err := dbmigrate.New(http.Dir(dirname), driverName, databaseURL)
 	if err != nil {
 		return err
 	}
 	defer m.CloseDB()
-
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 

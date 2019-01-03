@@ -8,6 +8,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/derekparker/trie"
 	"github.com/pkg/errors"
@@ -26,6 +27,47 @@ func SanitizeDriverNameURL(driverName string, databaseURL string) (string, strin
 		driverName = strings.Split(databaseURL, ":")[0]
 	}
 	return driverName, databaseURL, nil
+}
+
+// BaseDatabaseURL returns the connection string to connect to the server (without the database name)
+func BaseDatabaseURL(driverName string, databaseURL string) (string, string, error) {
+	driverName, databaseURL, err := SanitizeDriverNameURL(driverName, databaseURL)
+	if err != nil {
+		return "", "", err
+	}
+
+	paths := strings.Split(databaseURL, "/")
+	pathlen := len(paths)
+	requestURI := strings.Split(paths[pathlen-1], "?")
+	basePaths := []string{strings.Join(paths[:pathlen-1], "/") + "/"}
+
+	if len(requestURI) > 1 {
+		basePaths = append(basePaths, requestURI[1:]...)
+	}
+	return strings.Join(basePaths, "?"), requestURI[0], nil
+}
+
+// ReadyWait for server to be ready, and try to create db and connect again
+func ReadyWait(ctx context.Context, driverName string, databaseURL string, logger func(...interface{})) error {
+	logger(driverName, "checking connection")
+	for {
+		db, err := sql.Open(driverName, databaseURL)
+		if err == nil {
+			logger(driverName, "server up")
+			var num int
+			if err = db.QueryRow("SELECT 1").Scan(&num); err == nil {
+				logger(driverName, "connected")
+				return db.Close()
+			}
+			db.Close()
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+			logger(driverName, "retrying...", err)
+		}
+	}
 }
 
 // A Config holds on to an open database to perform dbmigrate
