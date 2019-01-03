@@ -83,7 +83,7 @@ func _main() error {
 			return errors.Wrapf(err, "database url without dbname")
 		}
 
-		if doServerReadyWait {
+		if doServerReadyWait && driverName != "sqlite3" {
 			ctx, cancel := context.WithTimeout(context.Background(), serverReadyWait)
 			defer cancel()
 			if err := dbmigrate.ReadyWait(ctx, driverName, connString, log.Println); err != nil {
@@ -91,7 +91,7 @@ func _main() error {
 			}
 		}
 
-		if doCreateDB {
+		if doCreateDB && driverName != "sqlite3" {
 			db, err := sql.Open(driverName, connString)
 			if err != nil {
 				return errors.Wrapf(err, "connect to db")
