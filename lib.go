@@ -13,6 +13,21 @@ import (
 	"github.com/pkg/errors"
 )
 
+// SanitizeDriverNameURL sanitizes `driverName` and `databaseURL` values
+func SanitizeDriverNameURL(driverName string, databaseURL string) (string, string, error) {
+	// ensure db and driverName is legit
+	databaseURL = strings.TrimSpace(databaseURL)
+	if databaseURL == "" {
+		return driverName, databaseURL, errors.Errorf("database url not set")
+	}
+	if driverName == "" {
+		// fall back to use the `scheme` part of the url as driverName
+		// e.g. `postgres://localhost:5432/dbmigrate_test` will thus be `postgres`
+		driverName = strings.Split(databaseURL, ":")[0]
+	}
+	return driverName, databaseURL, nil
+}
+
 // A Config holds on to an open database to perform dbmigrate
 type Config struct {
 	dir            http.FileSystem
@@ -28,15 +43,9 @@ type Config struct {
 // - database fails to connect or retrieve existing versions
 // - unable to read list of files from `dir`
 func New(dir http.FileSystem, driverName string, databaseURL string) (*Config, error) {
-	// ensure db and driverName is legit
-	databaseURL = strings.TrimSpace(databaseURL)
-	if databaseURL == "" {
-		return nil, errors.Errorf("either `-url` command line flag or DATABASE_URL environment variable must be set. see `--help` for more details.")
-	}
-	if driverName == "" {
-		// fall back to use the `scheme` part of the url as driverName
-		// e.g. `postgres://localhost:5432/dbmigrate_test` will thus be `postgres`
-		driverName = strings.Split(databaseURL, ":")[0]
+	driverName, databaseURL, err := SanitizeDriverNameURL(driverName, databaseURL)
+	if err != nil {
+		return nil, errors.Wrapf(err, "see `--help` for more details.")
 	}
 	var ok bool
 	adapter, ok := adapters[driverName]
