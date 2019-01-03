@@ -1,6 +1,7 @@
 package dbmigrate
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"io/ioutil"
@@ -209,7 +210,9 @@ func (c *Config) MigrateUp(ctx context.Context, txOpts *sql.TxOptions, logFilena
 			return errors.Wrapf(err, currName)
 		}
 
-		if _, err := tx.ExecContext(ctx, string(filecontent)); err != nil {
+		if len(bytes.TrimSpace(filecontent)) == 0 {
+			// treat empty file as success; don't run it
+		} else if _, err := tx.ExecContext(ctx, string(filecontent)); err != nil {
 			return errors.Wrapf(err, currName)
 		}
 		if _, err := tx.ExecContext(ctx, c.adapter.InsertNewVersion, currVer); err != nil {
@@ -262,7 +265,10 @@ func (c *Config) MigrateDown(ctx context.Context, txOpts *sql.TxOptions, logFile
 		if err != nil {
 			return errors.Wrapf(err, currName)
 		}
-		if _, err := tx.ExecContext(ctx, string(filecontent)); err != nil {
+
+		if len(bytes.TrimSpace(filecontent)) == 0 {
+			// treat empty file as success; don't run it
+		} else if _, err := tx.ExecContext(ctx, string(filecontent)); err != nil {
 			return errors.Wrapf(err, currName)
 		}
 		if _, err := tx.ExecContext(ctx, c.adapter.DeleteOldVersion, currVer); err != nil {

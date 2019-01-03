@@ -23,8 +23,8 @@ PENDING_VERSIONS="
 `${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -versions-pending`"
 
 # give a no-op migration
-echo 'SELECT 1;' > ${DB_MIGRATIONS_DIR}/*_finally-do-nothing.up.sql
-echo 'SELECT 1;' > ${DB_MIGRATIONS_DIR}/*_finally-do-nothing.down.sql
+printf "  \t\r\n \n\n \t" > ${DB_MIGRATIONS_DIR}/*_finally-do-nothing.up.sql
+printf "  \t\r\n \n\n \t" > ${DB_MIGRATIONS_DIR}/*_finally-do-nothing.down.sql
 
 # `-up` should fail; but recoverable later
 cp tests/db/${DATABASE_DRIVER}/{20181222073546,20181222073750,20181222073901}_* ${DB_MIGRATIONS_DIR}
