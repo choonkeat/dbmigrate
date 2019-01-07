@@ -31,7 +31,7 @@ func SanitizeDriverNameURL(driverName string, databaseURL string) (string, strin
 }
 
 // BaseDatabaseURL returns the connection string to connect to the server (without the database name)
-func BaseDatabaseURL(driverName string, databaseURL string) (string, string, error) {
+func BaseDatabaseURL(driverName string, databaseURL string, defaultDbName string) (string, string, error) {
 	driverName, databaseURL, err := SanitizeDriverNameURL(driverName, databaseURL)
 	if err != nil {
 		return "", "", err
@@ -40,7 +40,7 @@ func BaseDatabaseURL(driverName string, databaseURL string) (string, string, err
 	paths := strings.Split(databaseURL, "/")
 	pathlen := len(paths)
 	requestURI := strings.Split(paths[pathlen-1], "?")
-	basePaths := []string{strings.Join(paths[:pathlen-1], "/") + "/"}
+	basePaths := []string{strings.Join(paths[:pathlen-1], "/") + defaultDbName}
 
 	if len(requestURI) > 1 {
 		basePaths = append(basePaths, requestURI[1:]...)
