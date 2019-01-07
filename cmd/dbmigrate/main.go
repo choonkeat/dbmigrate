@@ -78,10 +78,12 @@ func _main() error {
 	}
 
 	if doServerReadyWait := serverReadyWait > 0; doServerReadyWait || doCreateDB {
-		connString, dbName, err := dbmigrate.BaseDatabaseURL(driverName, databaseURL)
+		driverName, _, _ = dbmigrate.SanitizeDriverNameURL(driverName, databaseURL)
+		connString, dbName, err := dbmigrate.BaseDatabaseURL(driverName, databaseURL, "/"+driverName)
 		if err != nil {
 			return errors.Wrapf(err, "database url without dbname")
 		}
+		log.Printf("connString=%q\n", connString)
 
 		if doServerReadyWait && driverName != "sqlite3" {
 			ctx, cancel := context.WithTimeout(context.Background(), serverReadyWait)
