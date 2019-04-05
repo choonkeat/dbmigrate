@@ -135,11 +135,3 @@ $
 > https://dev.mysql.com/doc/refman/8.0/en/cannot-roll-back.html
 
 If you're using MySQL, make sure to have DDL (e.g. `CREATE TABLE ...`) in their individual `*.sql` files.
-
-## Demo
-
-[![asciicast](https://asciinema.org/a/11onajScFBZFAutBwB8K4RENl.svg)](https://asciinema.org/a/11onajScFBZFAutBwB8K4RENl)
-
-Running integration tests with postgres, mariadb, and mysql
-
-[![asciicast](https://asciinema.org/a/E8ifl4p5v6lL44f6lRd4r1bed.svg)](https://asciinema.org/a/E8ifl4p5v6lL44f6lRd4r1bed)
