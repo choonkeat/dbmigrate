@@ -83,12 +83,11 @@ func _main() error {
 		if err != nil {
 			return errors.Wrapf(err, "database url without dbname")
 		}
-		log.Printf("connString=%q\n", connString)
 
 		if doServerReadyWait && driverName != "sqlite3" {
 			ctx, cancel := context.WithTimeout(context.Background(), serverReadyWait)
 			defer cancel()
-			if err := dbmigrate.ReadyWait(ctx, driverName, connString, log.Println); err != nil {
+			if err := dbmigrate.ReadyWait(ctx, driverName, []string{databaseURL, connString}, log.Println); err != nil {
 				return err
 			}
 		}

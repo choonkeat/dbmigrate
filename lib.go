@@ -49,10 +49,13 @@ func BaseDatabaseURL(driverName string, databaseURL string, defaultDbName string
 }
 
 // ReadyWait for server to be ready, and try to create db and connect again
-func ReadyWait(ctx context.Context, driverName string, databaseURL string, logger func(...interface{})) error {
+func ReadyWait(ctx context.Context, driverName string, databaseURLs []string, logger func(...interface{})) error {
 	logger(driverName, "checking connection")
+	count := len(databaseURLs)
+	curr := -1
 	for {
-		db, err := sql.Open(driverName, databaseURL)
+		curr = (curr + 1) % count
+		db, err := sql.Open(driverName, databaseURLs[curr])
 		if err == nil {
 			logger(driverName, "server up")
 			var num int
