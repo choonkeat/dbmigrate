@@ -1,6 +1,212 @@
 # dbmigrate [![Build Status](https://travis-ci.com/choonkeat/dbmigrate.svg?branch=master)](https://travis-ci.com/choonkeat/dbmigrate)
 
-`rails migrate` inspired approach to database schema migrations but with plain sql files. and much faster.
+`rails migrate` [inspired](https://blog.choonkeat.com/weblog/2019/05/database-schema-migration.html) approach to database schema migrations but with plain sql files. and much faster.
+
+## Getting started with docker-compose
+
+### Given a working app
+
+Let's say we have a simple docker-compose project setup with only a `docker-compose.yml` file
+
+```
+$ tree .
+.
+└── docker-compose.yml
+
+0 directories, 1 file
+```
+
+That declares a postgres database (`mydb`) and an app (`myapp`) that uses the database somehow (in our contrived example, we're just listing the tables in our database with `\dt`)
+
+
+``` yaml
+version: '3'
+services:
+    mydb:
+        image: "postgres"
+        environment:
+            - POSTGRES_DB=myapp_development
+            - POSTGRES_USER=myuser
+            - POSTGRES_PASSWORD=topsecret
+
+    myapp:
+        image: "postgres"
+        command: >-
+            sh -c '
+                until pg_isready --host=mydb --port=5432 --timeout=30; do sleep 1; done;
+                psql postgres://myuser:topsecret@mydb:5432/myapp_development -c \\dt
+            '
+        depends_on:
+            - mydb
+```
+
+Let's see how our app runs
+
+```
+$ docker-compose up myapp
+Creating dbmigrate-example_mydb_1 ... done
+Creating dbmigrate-example_myapp_1 ... done
+Attaching to dbmigrate-example_myapp_1
+myapp_1  | mydb:5432 - no response
+myapp_1  | mydb:5432 - no response
+myapp_1  | mydb:5432 - accepting connections
+myapp_1  | Did not find any relations.
+dbmigrate-example_myapp_1 exited with code 0
+```
+
+The output simply shows that
+- our `myapp` waited until `mydb:5432` was ready to accept connections
+- then it listed the tables inside the database and got `Did not find any relations` (which means no tables)
+
+### Add `dbmigrate`
+
+Now let's add `dbmigrate` to our docker-compose.yml (take special note that `myapp` has a new entry under `depends_on` also)
+
+``` yaml
+version: '3'
+services:
+    mydb:
+        image: "postgres"
+        environment:
+            - POSTGRES_DB=myapp_development
+            - POSTGRES_USER=myuser
+            - POSTGRES_PASSWORD=topsecret
+
+    myapp:
+        image: "postgres"
+        command: >-
+            sh -c '
+                until pg_isready --host=mydb --port=5432 --timeout=30; do sleep 1; done;
+                psql postgres://myuser:topsecret@mydb:5432/myapp_development -c \\dt
+            '
+        depends_on:
+            - mydb
+            - dbmigrate
+
+    # by default apply migrations with `-up` flag
+    # we can run different commands by overwriting `DBMIGRATE_CMD` env
+    # try DBMIGRATE_CMD="-h" to see what other flags dbmigrate can offer
+    dbmigrate:
+        image: "choonkeat/dbmigrate"
+        environment:
+            - DATABASE_URL=postgres://myuser:topsecret@mydb:5432/myapp_development?sslmode=disable
+        volumes:
+            - .:/app
+        working_dir: /app
+        command: ${DBMIGRATE_CMD:--up}
+        depends_on:
+            - mydb
+```
+
+And we can start creating a few migration scripts by running `docker-compose up dbmigrate` with a custom `DBMIGRATE_CMD` env variable
+
+```
+$ DBMIGRATE_CMD="-create users" docker-compose up dbmigrate
+dbmigrate-example_mydb_1 is up-to-date
+Creating dbmigrate-example_dbmigrate_1 ... done
+Attaching to dbmigrate-example_dbmigrate_1
+dbmigrate_1  | 2019/06/01 08:58:05 writing db/migrations/20190601085805_users.up.sql
+dbmigrate_1  | 2019/06/01 08:58:05 writing db/migrations/20190601085805_users.down.sql
+dbmigrate-example_dbmigrate_1 exited with code 0
+```
+
+```
+$ DBMIGRATE_CMD="-create blogs" docker-compose up dbmigrate
+dbmigrate-example_mydb_1 is up-to-date
+Recreating dbmigrate-example_dbmigrate_1 ... done
+Attaching to dbmigrate-example_dbmigrate_1
+dbmigrate_1  | 2019/06/01 08:58:14 writing db/migrations/20190601085814_blogs.up.sql
+dbmigrate_1  | 2019/06/01 08:58:14 writing db/migrations/20190601085814_blogs.down.sql
+dbmigrate-example_dbmigrate_1 exited with code 0
+```
+
+After running those 2 commands, we see that we've generated 2 pairs of _empty_ `*.up.sql` and `*.down.sql` files.
+
+```
+$ tree .
+.
+├── db
+│   └── migrations
+│       ├── 20190601085805_users.down.sql
+│       ├── 20190601085805_users.up.sql
+│       ├── 20190601085814_blogs.down.sql
+│       └── 20190601085814_blogs.up.sql
+└── docker-compose.yml
+
+2 directories, 5 files
+```
+
+We add our SQLs into our respective files
+
+``` sql
+-- db/migrations/20190601085805_users.up.sql
+CREATE TABLE IF NOT EXISTS users (
+    "id" SERIAL primary key
+);
+```
+
+``` sql
+-- db/migrations/20190601085805_users.down.sql
+DROP TABLE IF EXISTS users;
+```
+
+``` sql
+-- db/migrations/20190601085814_blogs.up.sql
+CREATE TABLE IF NOT EXISTS blogs (
+    "id" SERIAL primary key
+);
+```
+
+``` sql
+-- db/migrations/20190601085814_blogs.down.sql
+DROP TABLE IF EXISTS blogs;
+```
+
+### Database schema migrations is now managed
+
+Let's see how our app runs after those changes
+
+```
+$ docker-compose up myapp
+dbmigrate-example_mydb_1 is up-to-date
+Recreating dbmigrate-example_dbmigrate_1 ... done
+Recreating dbmigrate-example_myapp_1     ... done
+Attaching to dbmigrate-example_myapp_1
+myapp_1      | mydb:5432 - accepting connections
+myapp_1      |               List of relations
+myapp_1      |  Schema |        Name        | Type  | Owner  
+myapp_1      | --------+--------------------+-------+--------
+myapp_1      |  public | blogs              | table | myuser
+myapp_1      |  public | dbmigrate_versions | table | myuser
+myapp_1      |  public | users              | table | myuser
+myapp_1      | (3 rows)
+myapp_1      |
+dbmigrate-example_myapp_1 exited with code 0
+```
+
+Hey, looks like we have 3 tables now:
+
+1. `blogs` created by our `db/migrations/20190601085814_blogs.up.sql`
+1. `users` created by our `db/migrations/20190601085805_users.up.sql`
+1. `dbmigrate_versions` created by `dbmigrate` for itself to track migration history.
+    - every time `dbmigrate` runs, it checks `dbmigrate_versions` table to know which files in `db/migrations` had been applied and skip them; which files have not been seen before and apply them
+
+We can look at the logs of the `dbmigrate` container to see what had happened when `myapp` booted up just now
+
+```
+$ docker-compose logs dbmigrate
+Attaching to dbmigrate-example_dbmigrate_1
+dbmigrate_1  | 2019/06/01 08:59:32 [up] 20190601085805_users.up.sql
+dbmigrate_1  | 2019/06/01 08:59:32 [up] 20190601085814_blogs.up.sql
+```
+
+### That's it
+
+Now everytime `myapp` starts up, since it declares `depends_on: dbmigrate`, our `dbmigrate` container will be run automatically to apply any new migration files in `db/migrations`. To add new migration files there, just run `docker-compose up dbmigrate` with a custom `DBMIGRATE_CMD` env variable (see above)
+
+---
+
+## Basic operations
 
 ### Create a new migration
 
