@@ -93,7 +93,7 @@ services:
         volumes:
             - .:/app
         working_dir: /app
-        command: ${DBMIGRATE_CMD:--up}
+        command: ${DBMIGRATE_CMD:--up -server-ready 60s -create-db}
         depends_on:
             - mydb
 ```
