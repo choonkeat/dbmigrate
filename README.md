@@ -341,3 +341,10 @@ $
 > https://dev.mysql.com/doc/refman/8.0/en/cannot-roll-back.html
 
 If you're using MySQL, make sure to have DDL (e.g. `CREATE TABLE ...`) in their individual `*.sql` files.
+
+### Caveat: `-create-db` and database names
+
+The SQL command `CREATE DATABASE <dbname>` does not work well (at least in postgres) if `<dbname>` contains dashes `-`. The proper way would've been to [quote](https://godoc.org/github.com/lib/pq#QuoteIdentifier) the value [when using it](https://github.com/choonkeat/dbmigrate/blob/5397b58246f8dfbfaf97897520eb8a9fdc5f129f/cmd/dbmigrate/main.go#L101) but alas there doesn't seem to be a driver agnostic way to quote that string [in Go](https://godoc.org/database/sql).
+
+The workaround is, if `-create-db` is needed, use underscore `_` for your dbname instead of dashes `-`
+
