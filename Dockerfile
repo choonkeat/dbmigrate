@@ -1,8 +1,8 @@
-FROM golang:latest AS builder
+FROM golang:1.14-stretch AS builder
 
+WORKDIR /src
 COPY . /src
-
-RUN GO111MODULE=on go build \
+RUN go build \
       -ldflags "-linkmode external -extldflags -static" \
       -o /bin/dbmigrate \
       /src/cmd/dbmigrate/*.go
