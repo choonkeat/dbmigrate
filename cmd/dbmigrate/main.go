@@ -77,14 +77,22 @@ func _main() error {
 		return nil
 	}
 
+	driverName, databaseURL, _ = dbmigrate.SanitizeDriverNameURL(driverName, databaseURL)
+
 	if doServerReadyWait := serverReadyWait > 0; doServerReadyWait || doCreateDB {
-		driverName, _, _ = dbmigrate.SanitizeDriverNameURL(driverName, databaseURL)
-		connString, dbName, err := dbmigrate.BaseDatabaseURL(driverName, databaseURL, "/"+driverName)
+		adapter, err := dbmigrate.AdapterFor(driverName)
 		if err != nil {
-			return errors.Wrapf(err, "database url without dbname")
+			return err
 		}
 
-		if doServerReadyWait && driverName != "sqlite3" {
+		if doServerReadyWait {
+			if adapter.BaseDatabaseURL == nil {
+				return errors.Errorf("%q does not support -server-ready", driverName)
+			}
+			connString, _, err := adapter.BaseDatabaseURL(databaseURL)
+			if err != nil {
+				return err
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), serverReadyWait)
 			defer cancel()
 			if err := dbmigrate.ReadyWait(ctx, driverName, []string{databaseURL, connString}, log.Println); err != nil {
@@ -92,13 +100,23 @@ func _main() error {
 			}
 		}
 
-		if doCreateDB && driverName != "sqlite3" {
+		if doCreateDB {
+			if adapter.BaseDatabaseURL == nil {
+				return errors.Errorf("%q does not support -create-db", driverName)
+			}
+			if adapter.CreateDatabaseQuery == nil {
+				return errors.Errorf("%q does not support -create-db", driverName)
+			}
+			connString, dbName, err := adapter.BaseDatabaseURL(databaseURL)
+			if err != nil {
+				return err
+			}
 			db, err := sql.Open(driverName, connString)
 			if err != nil {
 				return errors.Wrapf(err, "connect to db")
 			}
 			// leave errors for subsequent actions
-			_, _ = db.Exec("CREATE DATABASE " + dbName)
+			_, _ = db.Exec(adapter.CreateDatabaseQuery(dbName))
 			_ = db.Close()
 		}
 	}

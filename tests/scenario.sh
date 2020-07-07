@@ -5,7 +5,7 @@ set -e
 source `dirname $0`/lib.sh
 
 # setup
-DBMIGRATE_CMD='./dbmigrate -server-ready 60s -create-db'
+DBMIGRATE_CMD="./dbmigrate ${DBMIGRATE_OPT}"
 DB_MIGRATIONS_DIR=tests/db/migrations
 
 trap finish EXIT

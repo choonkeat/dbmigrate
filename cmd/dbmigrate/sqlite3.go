@@ -5,6 +5,9 @@ package main
 //      env CGO_ENABLED=1 make build BUILD_TARGET="./cmd/dbmigrate"
 
 import (
+	"context"
+	"database/sql"
+
 	"github.com/choonkeat/dbmigrate"
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -15,5 +18,9 @@ func init() {
 		SelectExistingVersions: `SELECT version FROM dbmigrate_versions ORDER BY version ASC`,
 		InsertNewVersion:       `INSERT INTO dbmigrate_versions (version) VALUES (?)`,
 		DeleteOldVersion:       `DELETE FROM dbmigrate_versions WHERE version = ?`,
+		PingQuery:              "SELECT 1",
+		BeginTx: func(ctx context.Context, db *sql.DB, opts *sql.TxOptions) (dbmigrate.ExecCommitRollbacker, error) {
+			return db.BeginTx(ctx, opts)
+		},
 	})
 }

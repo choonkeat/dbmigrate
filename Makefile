@@ -1,5 +1,5 @@
-DATABASE_DRIVERS=postgres mariadb mysql
-BUILD_TARGET=./cmd/dbmigrate/main.go
+DATABASE_DRIVERS=cql sqlite3 postgres mariadb mysql
+BUILD_TARGET=./cmd/dbmigrate/*.go
 
 test: build
 	go build -o /dev/null ./examples # verify examples can compile
