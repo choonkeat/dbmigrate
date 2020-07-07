@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"io/ioutil"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -15,42 +16,34 @@ import (
 	"github.com/pkg/errors"
 )
 
+// RequireDriverName to indicate explicit driver name
+var RequireDriverName = errors.Errorf("Cannot discern db driver. Please set -driver flag or DATABASE_DRIVER environment variable.")
+
 // SanitizeDriverNameURL sanitizes `driverName` and `databaseURL` values
-func SanitizeDriverNameURL(driverName string, databaseURL string) (string, string, error) {
+func SanitizeDriverNameURL(driverName string, databaseURL string) (dbdriver string, dburl string, err error) {
 	// ensure db and driverName is legit
 	databaseURL = strings.TrimSpace(databaseURL)
 	if databaseURL == "" {
 		return driverName, databaseURL, errors.Errorf("database url not set")
 	}
-	if driverName == "" {
-		// fall back to use the `scheme` part of the url as driverName
-		// e.g. `postgres://localhost:5432/dbmigrate_test` will thus be `postgres`
-		driverName = strings.Split(databaseURL, ":")[0]
+	driverName = strings.TrimSpace(driverName)
+	if driverName != "" {
+		return driverName, databaseURL, nil
 	}
-	return driverName, databaseURL, nil
-}
-
-// BaseDatabaseURL returns the connection string to connect to the server (without the database name)
-func BaseDatabaseURL(driverName string, databaseURL string, defaultDbName string) (string, string, error) {
-	driverName, databaseURL, err := SanitizeDriverNameURL(driverName, databaseURL)
-	if err != nil {
-		return "", "", err
+	if u, err := url.Parse(databaseURL); strings.Contains(databaseURL, "://") && u != nil && err == nil {
+		return u.Scheme, databaseURL, nil
 	}
-
-	paths := strings.Split(databaseURL, "/")
-	pathlen := len(paths)
-	requestURI := strings.Split(paths[pathlen-1], "?")
-	basePaths := []string{strings.Join(paths[:pathlen-1], "/") + defaultDbName}
-
-	if len(requestURI) > 1 {
-		basePaths = append(basePaths, requestURI[1:]...)
-	}
-	return strings.Join(basePaths, "?"), requestURI[0], nil
+	return "", databaseURL, RequireDriverName
 }
 
 // ReadyWait for server to be ready, and try to create db and connect again
 func ReadyWait(ctx context.Context, driverName string, databaseURLs []string, logger func(...interface{})) error {
 	logger(driverName, "checking connection")
+	adapter, err := AdapterFor(driverName)
+	if err != nil {
+		return err
+	}
+
 	count := len(databaseURLs)
 	curr := -1
 	for {
@@ -59,7 +52,7 @@ func ReadyWait(ctx context.Context, driverName string, databaseURLs []string, lo
 		if err == nil {
 			logger(driverName, "server up")
 			var num int
-			if err = db.QueryRow("SELECT 1").Scan(&num); err == nil {
+			if err = db.QueryRow(adapter.PingQuery).Scan(&num); err == nil {
 				logger(driverName, "connected")
 				return db.Close()
 			}
@@ -93,10 +86,9 @@ func New(dir http.FileSystem, driverName string, databaseURL string) (*Config, e
 	if err != nil {
 		return nil, errors.Wrapf(err, "see `--help` for more details.")
 	}
-	var ok bool
-	adapter, ok := adapters[driverName]
-	if !ok {
-		return nil, errors.Errorf("unsupported driver name %q", driverName)
+	adapter, err := AdapterFor(driverName)
+	if err != nil {
+		return nil, err
 	}
 	db, err := sql.Open(driverName, databaseURL)
 	if err != nil {
@@ -175,6 +167,13 @@ func (c *Config) PendingVersions(ctx context.Context) ([]string, error) {
 	return result, nil
 }
 
+// ExecCommitRollbacker interface for sql.Tx
+type ExecCommitRollbacker interface {
+	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
+	Commit() error
+	Rollback() error
+}
+
 // MigrateUp applies pending migrations in ascending order, in a transaction
 //
 // Transaction is committed on success, rollback on error. Different databases will behave
@@ -185,7 +184,7 @@ func (c *Config) MigrateUp(ctx context.Context, txOpts *sql.TxOptions, logFilena
 		return errors.Wrapf(err, "unable to query existing versions")
 	}
 
-	tx, err := c.db.BeginTx(ctx, txOpts)
+	tx, err := c.adapter.BeginTx(ctx, c.db, txOpts)
 	if err != nil {
 		return errors.Wrapf(err, "unable to create transaction")
 	}
@@ -236,7 +235,7 @@ func (c *Config) MigrateDown(ctx context.Context, txOpts *sql.TxOptions, logFile
 		return errors.Wrapf(err, "unable to query existing versions")
 	}
 
-	tx, err := c.db.BeginTx(ctx, txOpts)
+	tx, err := c.adapter.BeginTx(ctx, c.db, txOpts)
 	if err != nil {
 		return errors.Wrapf(err, "unable to create transaction")
 	}
@@ -306,19 +305,68 @@ type Adapter struct {
 	SelectExistingVersions string
 	InsertNewVersion       string
 	DeleteOldVersion       string
+	PingQuery              string                                                     // `""` means does NOT support -server-ready
+	CreateDatabaseQuery    func(string) string                                        // nil means does NOT support -create-db
+	BaseDatabaseURL        func(string) (connString string, dbName string, err error) // nil means does not support -server-ready nor -create-db
+	BeginTx                func(ctx context.Context, db *sql.DB, opts *sql.TxOptions) (ExecCommitRollbacker, error)
 }
 
 var adapters = map[string]Adapter{
-	"postgres": Adapter{
+	"postgres": {
 		CreateVersionsTable:    `CREATE TABLE dbmigrate_versions (version char(14) NOT NULL PRIMARY KEY)`,
 		SelectExistingVersions: `SELECT version FROM dbmigrate_versions ORDER BY version ASC`,
 		InsertNewVersion:       `INSERT INTO dbmigrate_versions (version) VALUES ($1)`,
 		DeleteOldVersion:       `DELETE FROM dbmigrate_versions WHERE version = $1`,
+		PingQuery:              "SELECT 1",
+		BaseDatabaseURL: func(databaseURL string) (string, string, error) {
+			paths := strings.Split(databaseURL, "/")
+			pathlen := len(paths)
+			requestURI := strings.Split(paths[pathlen-1], "?")
+			basePaths := []string{strings.Join(paths[:pathlen-1], "/") + "/postgres"}
+
+			if len(requestURI) > 1 {
+				basePaths = append(basePaths, requestURI[1:]...)
+			}
+			return strings.Join(basePaths, "?"), requestURI[0], nil
+		},
+		CreateDatabaseQuery: func(dbName string) string {
+			return "CREATE DATABASE " + dbName
+		},
+		BeginTx: func(ctx context.Context, db *sql.DB, opts *sql.TxOptions) (ExecCommitRollbacker, error) {
+			return db.BeginTx(ctx, opts)
+		},
 	},
-	"mysql": Adapter{
+	"mysql": {
 		CreateVersionsTable:    `CREATE TABLE dbmigrate_versions (version char(14) NOT NULL PRIMARY KEY)`,
 		SelectExistingVersions: `SELECT version FROM dbmigrate_versions ORDER BY version ASC`,
 		InsertNewVersion:       `INSERT INTO dbmigrate_versions (version) VALUES (?)`,
 		DeleteOldVersion:       `DELETE FROM dbmigrate_versions WHERE version = ?`,
+		PingQuery:              "SELECT 1",
+		BaseDatabaseURL: func(databaseURL string) (string, string, error) {
+			paths := strings.Split(databaseURL, "/")
+			pathlen := len(paths)
+			requestURI := strings.Split(paths[pathlen-1], "?")
+			basePaths := []string{strings.Join(paths[:pathlen-1], "/") + "/mysql"}
+
+			if len(requestURI) > 1 {
+				basePaths = append(basePaths, requestURI[1:]...)
+			}
+			return strings.Join(basePaths, "?"), requestURI[0], nil
+		},
+		CreateDatabaseQuery: func(dbName string) string {
+			return "CREATE DATABASE " + dbName
+		},
+		BeginTx: func(ctx context.Context, db *sql.DB, opts *sql.TxOptions) (ExecCommitRollbacker, error) {
+			return db.BeginTx(ctx, opts)
+		},
 	},
+}
+
+// AdapterFor returns Adapter for given driverName
+func AdapterFor(driverName string) (Adapter, error) {
+	a, ok := adapters[driverName]
+	if !ok {
+		return a, errors.Errorf("unsupported driver name %q", driverName)
+	}
+	return a, nil
 }

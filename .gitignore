@@ -1,0 +1,3 @@
+cid.txt
+./dbmigrate
+tests/db/migrations
