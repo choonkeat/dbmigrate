@@ -12,6 +12,7 @@ DB_MIGRATIONS_DIR=tests/db/migrations
 TARGET_SCRIPT=$1
 
 function finish {
+    test -f cid.txt && docker stop `cat cid.txt` >/dev/null  || true
     test -f cid.txt && docker rm -f `cat cid.txt` >/dev/null || true
     rm -f cid.txt
 }
@@ -49,6 +50,24 @@ case $DATABASE_DRIVER in
     fi
     env DATABASE_DRIVER=sqlite3 DBMIGRATE_OPT="" DATABASE_URL="./tests/sqlite3.db" DB_MIGRATIONS_DIR=${DB_MIGRATIONS_DIR} bash ${TARGET_SCRIPT}
     rm -f "./tests/sqlite3.db"
+    ;;
+    cql)
+    docker run --rm -p ${PORT}:9042 -d --cidfile cid.txt cassandra
+    if env DATABASE_DRIVER=cql DBMIGRATE_OPT='-server-ready 60s -create-db' DATABASE_URL="localhost:${PORT}?keyspace=${DB_NAME}" DB_MIGRATIONS_DIR=${DB_MIGRATIONS_DIR} bash ${TARGET_SCRIPT}; then
+        fail "should not support -create-db"
+        exit 1
+    else
+        pass "should not support -create-db"
+    fi
+    docker logs --since 1m `cat cid.txt`
+    until docker exec -t `cat cid.txt` cqlsh -e 'describe cluster' >/dev/null; do docker logs --since 1m `cat cid.txt`; echo waiting for cassandra; sleep 1; done
+    until docker exec -t `cat cid.txt` cqlsh -e "CREATE KEYSPACE IF NOT EXISTS ${DB_NAME} WITH replication = {'class':'SimpleStrategy', 'replication_factor' : 1};"; do
+        docker logs --since 1m `cat cid.txt`;
+        fail "unexpected error pre-creating keyspace ${DB_NAME}; retrying..."
+        sleep 1
+    done
+    env DATABASE_DRIVER=cql DBMIGRATE_OPT='-server-ready 60s' DATABASE_URL="localhost:${PORT}?keyspace=${DB_NAME}&timeout=3m" DB_MIGRATIONS_DIR=${DB_MIGRATIONS_DIR} bash ${TARGET_SCRIPT}
+    finish
     ;;
     *)
     echo Unknown DATABASE_DRIVER=${DATABASE_DRIVER}
