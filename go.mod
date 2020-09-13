@@ -2,10 +2,8 @@ module github.com/choonkeat/dbmigrate
 
 go 1.14
 
-replace github.com/MichaelS11/go-cql-driver => github.com/choonkeat/go-cql-driver v0.0.0-20200911061401-46bdfd182e1a
-
 require (
-	github.com/MichaelS11/go-cql-driver v0.0.0-20190914174813-cf3b3196aa43
+	github.com/MichaelS11/go-cql-driver v0.0.0-20200913064606-22a9d51829da // indirect
 	github.com/derekparker/trie v0.0.0-20180212171413-e608c2733dc7
 	github.com/go-sql-driver/mysql v1.4.1
 	github.com/gocql/gocql v0.0.0-20200624222514-34081eda590e // indirect
