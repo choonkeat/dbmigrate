@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
-	"net/http"
 	"os"
 	"path"
 	"regexp"
@@ -68,7 +67,7 @@ func _main() error {
 	if doCreateMigration {
 		description := strings.Join(flag.Args(), " ")
 		name := versionedName(time.Now(), description)
-		if err := os.MkdirAll(dirname, 0755); err != nil {
+		if err := os.MkdirAll(dirname, 0o755); err != nil {
 			return errors.Wrapf(err, "failed to create -dir %q", dirname)
 		}
 		if err := writeFile(dirname, name); err != nil {
@@ -121,7 +120,7 @@ func _main() error {
 		}
 	}
 
-	m, err := dbmigrate.New(http.Dir(dirname), driverName, databaseURL)
+	m, err := dbmigrate.New(os.DirFS(dirname), driverName, databaseURL)
 	if err != nil {
 		return err
 	}
@@ -175,10 +174,10 @@ func versionedName(now time.Time, description string) string {
 func writeFile(dirname, name string) error {
 	upfile, downfile := path.Join(dirname, name+".up.sql"), path.Join(dirname, name+".down.sql")
 	log.Println("writing", upfile)
-	err := ioutil.WriteFile(upfile, []byte(nil), 0644)
+	err := ioutil.WriteFile(upfile, []byte(nil), 0o644)
 	if err != nil {
 		return err
 	}
 	log.Println("writing", downfile)
-	return ioutil.WriteFile(downfile, []byte(nil), 0644)
+	return ioutil.WriteFile(downfile, []byte(nil), 0o644)
 }

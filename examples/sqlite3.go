@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"net/http"
 	"os"
 	"time"
 
@@ -23,7 +22,7 @@ func sqlite3DbmigrateUp() error {
 	// though we're using plain local file system in this example
 	// `fileSystem` could be anything that implements http.FileSystem
 	// e.g. gobuffalo/packr, go-bindata-assetfs, etc
-	fileSystem := http.Dir("tests/db/sqlite3")
+	fileSystem := os.DirFS("tests/db/sqlite3")
 
 	// Example env variables
 	//   DATABASE_DRIVER=sqlite3
