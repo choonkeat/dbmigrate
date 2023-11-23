@@ -1,6 +1,6 @@
 module github.com/choonkeat/dbmigrate
 
-go 1.14
+go 1.16
 
 require (
 	github.com/MichaelS11/go-cql-driver v0.0.0-20200913064606-22a9d51829da // indirect

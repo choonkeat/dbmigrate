@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"io/fs"
 	"io/ioutil"
-	"net/http"
 	"net/url"
-	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -69,10 +69,10 @@ func ReadyWait(ctx context.Context, driverName string, databaseURLs []string, lo
 
 // A Config holds on to an open database to perform dbmigrate
 type Config struct {
-	dir            http.FileSystem
+	dir            fs.FS
 	db             *sql.DB
 	adapter        Adapter
-	migrationFiles []os.FileInfo
+	migrationFiles []string
 }
 
 // New returns an instance of &Config
@@ -81,7 +81,7 @@ type Config struct {
 // - database driver is unsupported (try adding support via `dbmigrate.Register`)
 // - database fails to connect or retrieve existing versions
 // - unable to read list of files from `dir`
-func New(dir http.FileSystem, driverName string, databaseURL string) (*Config, error) {
+func New(dir fs.FS, driverName string, databaseURL string) (*Config, error) {
 	driverName, databaseURL, err := SanitizeDriverNameURL(driverName, databaseURL)
 	if err != nil {
 		return nil, errors.Wrapf(err, "see `--help` for more details.")
@@ -95,13 +95,22 @@ func New(dir http.FileSystem, driverName string, databaseURL string) (*Config, e
 		return nil, errors.Wrapf(err, "unable to connect to -url")
 	}
 
-	f, err := dir.Open(".")
-	if err != nil {
-		return nil, errors.Wrapf(err, "unable to open directory %q", dir)
-	}
-	defer f.Close()
-
-	migrationFiles, err := f.Readdir(-1)
+	var migrationFiles []string
+	err = fs.WalkDir(dir, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		fp := path
+		if !strings.HasSuffix(path, ".sql") &&
+			strings.HasSuffix(d.Name(), ".sql") {
+			fp = filepath.Join(path, d.Name())
+		}
+		migrationFiles = append(migrationFiles, fp)
+		return nil
+	})
 	if err != nil {
 		return nil, errors.Wrapf(err, "unable to read from directory %q", dir)
 	}
@@ -148,15 +157,14 @@ func (c *Config) PendingVersions(ctx context.Context) ([]string, error) {
 
 	migrationFiles := c.migrationFiles
 	sort.SliceStable(migrationFiles, func(i int, j int) bool {
-		return strings.Compare(migrationFiles[i].Name(), migrationFiles[j].Name()) == -1 // in ascending order
+		return strings.Compare(migrationFiles[i], migrationFiles[j]) == -1 // in ascending order
 	})
 
 	result := []string{}
 	for i := range migrationFiles {
-		currFile := migrationFiles[i]
-		currName := currFile.Name()
-		if !strings.HasSuffix(currName, ".up.sql") {
-			continue // skip if this isn't a `.up.sql`
+		currName := migrationFiles[i]
+		if !strings.HasSuffix(currName, "up.sql") {
+			continue // skip if this isn't a `up.sql`
 		}
 		currVer := strings.Split(currName, "_")[0]
 		if _, found := migratedVersions.Find(currVer); found {
@@ -192,14 +200,13 @@ func (c *Config) MigrateUp(ctx context.Context, txOpts *sql.TxOptions, logFilena
 
 	migrationFiles := c.migrationFiles
 	sort.SliceStable(migrationFiles, func(i int, j int) bool {
-		return strings.Compare(migrationFiles[i].Name(), migrationFiles[j].Name()) == -1 // in ascending order
+		return strings.Compare(migrationFiles[i], migrationFiles[j]) == -1 // in ascending order
 	})
 
 	for i := range migrationFiles {
-		currFile := migrationFiles[i]
-		currName := currFile.Name()
-		if !strings.HasSuffix(currName, ".up.sql") {
-			continue // skip if this isn't a `.up.sql`
+		currName := migrationFiles[i]
+		if !strings.HasSuffix(currName, "up.sql") {
+			continue // skip if this isn't a `up.sql`
 		}
 		currVer := strings.Split(currName, "_")[0]
 		if _, found := migratedVersions.Find(currVer); found {
@@ -243,13 +250,12 @@ func (c *Config) MigrateDown(ctx context.Context, txOpts *sql.TxOptions, logFile
 
 	migrationFiles := c.migrationFiles
 	sort.SliceStable(migrationFiles, func(i int, j int) bool {
-		return strings.Compare(migrationFiles[i].Name(), migrationFiles[j].Name()) == 1 // descending order
+		return strings.Compare(migrationFiles[i], migrationFiles[j]) == 1 // descending order
 	})
 
 	counted := 0
 	for i := range migrationFiles {
-		currFile := migrationFiles[i]
-		currName := currFile.Name()
+		currName := migrationFiles[i]
 		if !strings.HasSuffix(currName, ".down.sql") {
 			continue // skip if this isn't a `.down.sql`
 		}
@@ -313,7 +319,7 @@ type Adapter struct {
 
 var adapters = map[string]Adapter{
 	"postgres": {
-		CreateVersionsTable:    `CREATE TABLE dbmigrate_versions (version char(14) NOT NULL PRIMARY KEY)`,
+		CreateVersionsTable:    `CREATE TABLE IF NOT EXISTS dbmigrate_versions (version char(14) NOT NULL PRIMARY KEY)`,
 		SelectExistingVersions: `SELECT version FROM dbmigrate_versions ORDER BY version ASC`,
 		InsertNewVersion:       `INSERT INTO dbmigrate_versions (version) VALUES ($1)`,
 		DeleteOldVersion:       `DELETE FROM dbmigrate_versions WHERE version = $1`,

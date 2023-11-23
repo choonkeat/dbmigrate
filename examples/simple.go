@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"net/http"
 	"os"
 	"time"
 
@@ -15,7 +14,7 @@ func simpleDbmigrateUp() error {
 	// though we're using plain local file system in this example
 	// `fileSystem` could be anything that implements http.FileSystem
 	// e.g. gobuffalo/packr, go-bindata-assetfs, etc
-	fileSystem := http.Dir("db/migrations")
+	fileSystem := os.DirFS("db/migrations")
 
 	// Example env variables
 	//   DATABASE_DRIVER=postgres
