@@ -1,7 +1,6 @@
 #!/bin/bash
 
-# abort on any failure
-set -e
+set -euxo pipefail
 source `dirname $0`/lib.sh
 
 PORT=65500
@@ -12,9 +11,11 @@ DB_MIGRATIONS_DIR=tests/db/migrations
 TARGET_SCRIPT=$1
 
 function finish {
+    local exit_code=$?  # Capture the exit code
     test -f cid.txt && docker stop `cat cid.txt` >/dev/null  || true
     test -f cid.txt && docker rm -f `cat cid.txt` >/dev/null || true
     rm -f cid.txt
+    exit $exit_code  # Explicitly exit with the captured code
 }
 trap finish EXIT
 
