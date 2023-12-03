@@ -16,10 +16,12 @@ import (
 
 func init() {
 	dbmigrate.Register("cql", dbmigrate.Adapter{
-		CreateVersionsTable:    `CREATE TABLE IF NOT EXISTS dbmigrate_versions (version text, PRIMARY KEY (version));`,
-		SelectExistingVersions: `SELECT version FROM dbmigrate_versions`,
-		InsertNewVersion:       `INSERT INTO dbmigrate_versions (version) VALUES (?)`,
-		DeleteOldVersion:       `DELETE FROM dbmigrate_versions WHERE version = ?`,
+		CreateVersionsTable: func(_ *string) string {
+			return `CREATE TABLE IF NOT EXISTS dbmigrate_versions (version text, PRIMARY KEY (version));`
+		},
+		SelectExistingVersions: func(_ *string) string { return `SELECT version FROM dbmigrate_versions` },
+		InsertNewVersion:       func(_ *string) string { return `INSERT INTO dbmigrate_versions (version) VALUES (?)` },
+		DeleteOldVersion:       func(_ *string) string { return `DELETE FROM dbmigrate_versions WHERE version = ?` },
 		PingQuery:              `SELECT gossip_generation FROM system.local`,
 		BaseDatabaseURL: func(databaseURL string) (string, string, error) {
 			u, err := url.Parse(databaseURL)

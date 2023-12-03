@@ -14,10 +14,12 @@ import (
 
 func init() {
 	dbmigrate.Register("sqlite3", dbmigrate.Adapter{
-		CreateVersionsTable:    `CREATE TABLE dbmigrate_versions (version char(14) NOT NULL PRIMARY KEY)`,
-		SelectExistingVersions: `SELECT version FROM dbmigrate_versions ORDER BY version ASC`,
-		InsertNewVersion:       `INSERT INTO dbmigrate_versions (version) VALUES (?)`,
-		DeleteOldVersion:       `DELETE FROM dbmigrate_versions WHERE version = ?`,
+		CreateVersionsTable: func(_ *string) string {
+			return `CREATE TABLE dbmigrate_versions (version char(14) NOT NULL PRIMARY KEY)`
+		},
+		SelectExistingVersions: func(_ *string) string { return `SELECT version FROM dbmigrate_versions ORDER BY version ASC` },
+		InsertNewVersion:       func(_ *string) string { return `INSERT INTO dbmigrate_versions (version) VALUES (?)` },
+		DeleteOldVersion:       func(_ *string) string { return `DELETE FROM dbmigrate_versions WHERE version = ?` },
 		PingQuery:              "SELECT 1",
 		BeginTx: func(ctx context.Context, db *sql.DB, opts *sql.TxOptions) (dbmigrate.ExecCommitRollbacker, error) {
 			return db.BeginTx(ctx, opts)

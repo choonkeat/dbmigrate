@@ -28,7 +28,7 @@ func simpleDbmigrateUp() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	return m.MigrateUp(ctx, &sql.TxOptions{}, func(currentFilename string) {
+	return m.MigrateUp(ctx, &sql.TxOptions{}, nil, func(currentFilename string) {
 		fmt.Println("[migrate up]", currentFilename) // optional print out of which file was migrated
 	})
 }

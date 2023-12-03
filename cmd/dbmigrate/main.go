@@ -20,19 +20,6 @@ import (
 	_ "github.com/lib/pq"
 )
 
-var (
-	serverReadyWait   time.Duration
-	doCreateDB        bool
-	doCreateMigration bool
-	doPendingVersions bool
-	doMigrateUp       bool
-	doMigrateDown     int
-	dirname           string
-	databaseURL       string
-	driverName        string
-	timeout           time.Duration
-)
-
 func main() {
 	if err := _main(); err != nil {
 		log.Fatalln(err.Error())
@@ -40,11 +27,27 @@ func main() {
 }
 
 func _main() error {
+	var (
+		serverReadyWait   time.Duration
+		doCreateDB        bool
+		dbSchema          *string
+		doCreateMigration bool
+		doPendingVersions bool
+		doMigrateUp       bool
+		doMigrateDown     int
+		dirname           string
+		databaseURL       string
+		driverName        string
+		timeout           time.Duration
+		errctx            error
+	)
+
 	// options
 	flag.DurationVar(&serverReadyWait,
 		"server-ready", 0, "wait until database server is ready, then continue")
 	flag.BoolVar(&doCreateDB,
 		"create-db", false, "create postgres database (ignore errors), then continue")
+	dbSchema = flag.String("schema", "", "create schema if necessary (ignore errors), then continue")
 	flag.BoolVar(&doCreateMigration,
 		"create", false, "add new migration files into -dir")
 	flag.BoolVar(&doPendingVersions,
@@ -76,12 +79,12 @@ func _main() error {
 		return nil
 	}
 
-	driverName, databaseURL, _ = dbmigrate.SanitizeDriverNameURL(driverName, databaseURL)
+	driverName, databaseURL, errctx = dbmigrate.SanitizeDriverNameURL(driverName, databaseURL)
 
-	if doServerReadyWait := serverReadyWait > 0; doServerReadyWait || doCreateDB {
+	if doServerReadyWait := serverReadyWait > 0; doServerReadyWait || doCreateDB || dbSchema != nil {
 		adapter, err := dbmigrate.AdapterFor(driverName)
 		if err != nil {
-			return err
+			return errors.Wrap(err, errctx.Error())
 		}
 
 		if doServerReadyWait {
@@ -90,12 +93,12 @@ func _main() error {
 			}
 			connString, _, err := adapter.BaseDatabaseURL(databaseURL)
 			if err != nil {
-				return err
+				return errors.Wrap(err, errctx.Error())
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), serverReadyWait)
 			defer cancel()
 			if err := dbmigrate.ReadyWait(ctx, driverName, []string{databaseURL, connString}, log.Println); err != nil {
-				return err
+				return errors.Wrap(err, errctx.Error())
 			}
 		}
 
@@ -108,21 +111,34 @@ func _main() error {
 			}
 			connString, dbName, err := adapter.BaseDatabaseURL(databaseURL)
 			if err != nil {
-				return err
+				return errors.Wrap(err, errctx.Error())
 			}
 			db, err := sql.Open(driverName, connString)
 			if err != nil {
 				return errors.Wrapf(err, "connect to db")
 			}
 			// leave errors for subsequent actions
-			_, _ = db.Exec(adapter.CreateDatabaseQuery(dbName))
+			_, errctx = db.Exec(adapter.CreateDatabaseQuery(dbName))
+			_ = db.Close()
+		}
+
+		if dbSchema != nil && *dbSchema != "" {
+			if adapter.CreateSchemaQuery == nil {
+				return errors.Errorf("%q does not support -schema", driverName)
+			}
+			db, err := sql.Open(driverName, databaseURL)
+			if err != nil {
+				return errors.Wrapf(err, "connect to db")
+			}
+			// leave errors for subsequent actions
+			_, errctx = db.Exec(adapter.CreateSchemaQuery(*dbSchema))
 			_ = db.Close()
 		}
 	}
 
 	m, err := dbmigrate.New(os.DirFS(dirname), driverName, databaseURL)
 	if err != nil {
-		return err
+		return errors.Wrap(err, errctx.Error())
 	}
 	defer m.CloseDB()
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -130,9 +146,9 @@ func _main() error {
 
 	// 2. SHOW pending versions; exit
 	if doPendingVersions {
-		versions, err := m.PendingVersions(ctx)
+		versions, err := m.PendingVersions(ctx, dbSchema)
 		if err != nil {
-			return err
+			return errors.Wrap(err, errctx.Error())
 		}
 		fmt.Println(strings.Join(versions, "\n"))
 		return nil
@@ -140,12 +156,12 @@ func _main() error {
 
 	// 3. MIGRATE UP; exit
 	if doMigrateUp {
-		return m.MigrateUp(ctx, &sql.TxOptions{}, filenameLogger("[up]"))
+		return m.MigrateUp(ctx, &sql.TxOptions{}, dbSchema, filenameLogger("[up]"))
 	}
 
 	// 4. MIGRATE DOWN; exit
 	if doMigrateDown > 0 {
-		return m.MigrateDown(ctx, &sql.TxOptions{}, filenameLogger("[down]"), doMigrateDown)
+		return m.MigrateDown(ctx, &sql.TxOptions{}, dbSchema, filenameLogger("[down]"), doMigrateDown)
 	}
 
 	// None of the above, fail
