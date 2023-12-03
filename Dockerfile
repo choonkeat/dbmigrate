@@ -1,4 +1,4 @@
-FROM golang:1.14-stretch AS builder
+FROM golang:1.16-stretch AS builder
 
 WORKDIR /src
 COPY . /src

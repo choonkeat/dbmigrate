@@ -229,7 +229,11 @@ func (c *Config) MigrateUp(ctx context.Context, txOpts *sql.TxOptions, logFilena
 		}
 		logFilename(currName)
 	}
-	return tx.Commit()
+	err = tx.Commit()
+	if err != nil && err.Error() == "pq: unexpected transaction status idle" {
+		return nil // ignore this error
+	}
+	return errors.Wrapf(err, "unable to commit transaction")
 }
 
 // MigrateDown un-applies at most N migrations in descending order, in a transaction
@@ -284,7 +288,11 @@ func (c *Config) MigrateDown(ctx context.Context, txOpts *sql.TxOptions, logFile
 		}
 		logFilename(currName)
 	}
-	return tx.Commit()
+	err = tx.Commit()
+	if err != nil && err.Error() == "pq: unexpected transaction status idle" {
+		return nil // ignore this error; already commited
+	}
+	return errors.Wrapf(err, "unable to commit transaction")
 }
 
 func (c *Config) fileContent(currName string) ([]byte, error) {
