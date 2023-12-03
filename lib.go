@@ -260,8 +260,8 @@ func (c *Config) MigrateDown(ctx context.Context, txOpts *sql.TxOptions, schema 
 	counted := 0
 	for i := range migrationFiles {
 		currName := migrationFiles[i]
-		if !strings.HasSuffix(currName, ".down.sql") {
-			continue // skip if this isn't a `.down.sql`
+		if !strings.HasSuffix(currName, "down.sql") {
+			continue // skip if this isn't a `down.sql`
 		}
 		currVer := strings.Split(currName, "_")[0]
 		if _, found := migratedVersions.Find(currVer); !found {
