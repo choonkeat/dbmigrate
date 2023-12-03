@@ -128,10 +128,10 @@ func (c *Config) CloseDB() error {
 	return c.db.Close()
 }
 
-func (c *Config) existingVersions(ctx context.Context) (*trie.Trie, error) {
+func (c *Config) existingVersions(ctx context.Context, schema *string) (*trie.Trie, error) {
 	// best effort create before we select; if the table is not there, next query will fail anyway
-	_, _ = c.db.ExecContext(ctx, c.adapter.CreateVersionsTable)
-	rows, err := c.db.QueryContext(ctx, c.adapter.SelectExistingVersions)
+	_, _ = c.db.ExecContext(ctx, c.adapter.CreateVersionsTable(schema))
+	rows, err := c.db.QueryContext(ctx, c.adapter.SelectExistingVersions(schema))
 	if err != nil {
 		return nil, err
 	}
@@ -149,8 +149,8 @@ func (c *Config) existingVersions(ctx context.Context) (*trie.Trie, error) {
 }
 
 // PendingVersions returns a slice of version strings that are not appled in the database yet
-func (c *Config) PendingVersions(ctx context.Context) ([]string, error) {
-	migratedVersions, err := c.existingVersions(ctx)
+func (c *Config) PendingVersions(ctx context.Context, schema *string) ([]string, error) {
+	migratedVersions, err := c.existingVersions(ctx, schema)
 	if err != nil {
 		return nil, errors.Wrapf(err, "unable to query existing versions")
 	}
@@ -186,8 +186,8 @@ type ExecCommitRollbacker interface {
 //
 // Transaction is committed on success, rollback on error. Different databases will behave
 // differently, e.g. postgres & sqlite3 can rollback DDL changes but mysql cannot
-func (c *Config) MigrateUp(ctx context.Context, txOpts *sql.TxOptions, logFilename func(string)) error {
-	migratedVersions, err := c.existingVersions(ctx)
+func (c *Config) MigrateUp(ctx context.Context, txOpts *sql.TxOptions, schema *string, logFilename func(string)) error {
+	migratedVersions, err := c.existingVersions(ctx, schema)
 	if err != nil {
 		return errors.Wrapf(err, "unable to query existing versions")
 	}
@@ -224,7 +224,7 @@ func (c *Config) MigrateUp(ctx context.Context, txOpts *sql.TxOptions, logFilena
 		} else if _, err := tx.ExecContext(ctx, string(filecontent)); err != nil {
 			return errors.Wrapf(err, currName)
 		}
-		if _, err := tx.ExecContext(ctx, c.adapter.InsertNewVersion, currVer); err != nil {
+		if _, err := tx.ExecContext(ctx, c.adapter.InsertNewVersion(schema), currVer); err != nil {
 			return errors.Wrapf(err, "fail to register version %q", currVer)
 		}
 		logFilename(currName)
@@ -236,8 +236,8 @@ func (c *Config) MigrateUp(ctx context.Context, txOpts *sql.TxOptions, logFilena
 //
 // Transaction is committed on success, rollback on error. Different databases will behave
 // differently, e.g. postgres & sqlite3 can rollback DDL changes but mysql cannot
-func (c *Config) MigrateDown(ctx context.Context, txOpts *sql.TxOptions, logFilename func(string), downStep int) error {
-	migratedVersions, err := c.existingVersions(ctx)
+func (c *Config) MigrateDown(ctx context.Context, txOpts *sql.TxOptions, schema *string, logFilename func(string), downStep int) error {
+	migratedVersions, err := c.existingVersions(ctx, schema)
 	if err != nil {
 		return errors.Wrapf(err, "unable to query existing versions")
 	}
@@ -279,7 +279,7 @@ func (c *Config) MigrateDown(ctx context.Context, txOpts *sql.TxOptions, logFile
 		} else if _, err := tx.ExecContext(ctx, string(filecontent)); err != nil {
 			return errors.Wrapf(err, currName)
 		}
-		if _, err := tx.ExecContext(ctx, c.adapter.DeleteOldVersion, currVer); err != nil {
+		if _, err := tx.ExecContext(ctx, c.adapter.DeleteOldVersion(schema), currVer); err != nil {
 			return errors.Wrapf(err, "fail to unregister version %q", currVer)
 		}
 		logFilename(currName)
@@ -307,23 +307,39 @@ func Register(name string, value Adapter) {
 
 // Adapter defines raw sql statements to run for an sql.DB adapter
 type Adapter struct {
-	CreateVersionsTable    string
-	SelectExistingVersions string
-	InsertNewVersion       string
-	DeleteOldVersion       string
+	CreateVersionsTable    func(*string) string
+	SelectExistingVersions func(*string) string
+	InsertNewVersion       func(*string) string
+	DeleteOldVersion       func(*string) string
 	PingQuery              string                                                     // `""` means does NOT support -server-ready
 	CreateDatabaseQuery    func(string) string                                        // nil means does NOT support -create-db
+	CreateSchemaQuery      func(string) string                                        // nil means does NOT support -schema
 	BaseDatabaseURL        func(string) (connString string, dbName string, err error) // nil means does not support -server-ready nor -create-db
 	BeginTx                func(ctx context.Context, db *sql.DB, opts *sql.TxOptions) (ExecCommitRollbacker, error)
 }
 
+func fqName(schema *string, name string) string {
+	if schema == nil || *schema == "" {
+		return name
+	}
+	return *schema + "." + name
+}
+
 var adapters = map[string]Adapter{
 	"postgres": {
-		CreateVersionsTable:    `CREATE TABLE IF NOT EXISTS dbmigrate_versions (version char(14) NOT NULL PRIMARY KEY)`,
-		SelectExistingVersions: `SELECT version FROM dbmigrate_versions ORDER BY version ASC`,
-		InsertNewVersion:       `INSERT INTO dbmigrate_versions (version) VALUES ($1)`,
-		DeleteOldVersion:       `DELETE FROM dbmigrate_versions WHERE version = $1`,
-		PingQuery:              "SELECT 1",
+		CreateVersionsTable: func(schema *string) string {
+			return `CREATE TABLE IF NOT EXISTS ` + fqName(schema, "dbmigrate_versions") + ` (version char(14) NOT NULL PRIMARY KEY)`
+		},
+		SelectExistingVersions: func(schema *string) string {
+			return `SELECT version FROM ` + fqName(schema, "dbmigrate_versions") + ` ORDER BY version ASC`
+		},
+		InsertNewVersion: func(schema *string) string {
+			return `INSERT INTO ` + fqName(schema, "dbmigrate_versions") + ` (version) VALUES ($1)`
+		},
+		DeleteOldVersion: func(schema *string) string {
+			return `DELETE FROM ` + fqName(schema, "dbmigrate_versions") + ` WHERE version = $1`
+		},
+		PingQuery: "SELECT 1",
 		BaseDatabaseURL: func(databaseURL string) (string, string, error) {
 			paths := strings.Split(databaseURL, "/")
 			pathlen := len(paths)
@@ -338,15 +354,20 @@ var adapters = map[string]Adapter{
 		CreateDatabaseQuery: func(dbName string) string {
 			return "CREATE DATABASE " + dbName
 		},
+		CreateSchemaQuery: func(schemaName string) string {
+			return "CREATE SCHEMA IF NOT EXISTS " + schemaName
+		},
 		BeginTx: func(ctx context.Context, db *sql.DB, opts *sql.TxOptions) (ExecCommitRollbacker, error) {
 			return db.BeginTx(ctx, opts)
 		},
 	},
 	"mysql": {
-		CreateVersionsTable:    `CREATE TABLE dbmigrate_versions (version char(14) NOT NULL PRIMARY KEY)`,
-		SelectExistingVersions: `SELECT version FROM dbmigrate_versions ORDER BY version ASC`,
-		InsertNewVersion:       `INSERT INTO dbmigrate_versions (version) VALUES (?)`,
-		DeleteOldVersion:       `DELETE FROM dbmigrate_versions WHERE version = ?`,
+		CreateVersionsTable: func(_ *string) string {
+			return `CREATE TABLE dbmigrate_versions (version char(14) NOT NULL PRIMARY KEY)`
+		},
+		SelectExistingVersions: func(_ *string) string { return `SELECT version FROM dbmigrate_versions ORDER BY version ASC` },
+		InsertNewVersion:       func(_ *string) string { return `INSERT INTO dbmigrate_versions (version) VALUES (?)` },
+		DeleteOldVersion:       func(_ *string) string { return `DELETE FROM dbmigrate_versions WHERE version = ?` },
 		PingQuery:              "SELECT 1",
 		BaseDatabaseURL: func(databaseURL string) (string, string, error) {
 			paths := strings.Split(databaseURL, "/")
