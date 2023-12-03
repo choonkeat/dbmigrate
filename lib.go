@@ -130,10 +130,10 @@ func (c *Config) CloseDB() error {
 
 func (c *Config) existingVersions(ctx context.Context, schema *string) (*trie.Trie, error) {
 	// best effort create before we select; if the table is not there, next query will fail anyway
-	_, _ = c.db.ExecContext(ctx, c.adapter.CreateVersionsTable(schema))
+	_, errctx := c.db.ExecContext(ctx, c.adapter.CreateVersionsTable(schema))
 	rows, err := c.db.QueryContext(ctx, c.adapter.SelectExistingVersions(schema))
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, errctx.Error())
 	}
 	defer rows.Close()
 

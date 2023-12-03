@@ -20,20 +20,6 @@ import (
 	_ "github.com/lib/pq"
 )
 
-var (
-	serverReadyWait   time.Duration
-	doCreateDB        bool
-	dbSchema          *string
-	doCreateMigration bool
-	doPendingVersions bool
-	doMigrateUp       bool
-	doMigrateDown     int
-	dirname           string
-	databaseURL       string
-	driverName        string
-	timeout           time.Duration
-)
-
 func main() {
 	if err := _main(); err != nil {
 		log.Fatalln(err.Error())
@@ -41,6 +27,21 @@ func main() {
 }
 
 func _main() error {
+	var (
+		serverReadyWait   time.Duration
+		doCreateDB        bool
+		dbSchema          *string
+		doCreateMigration bool
+		doPendingVersions bool
+		doMigrateUp       bool
+		doMigrateDown     int
+		dirname           string
+		databaseURL       string
+		driverName        string
+		timeout           time.Duration
+		errctx            error
+	)
+
 	// options
 	flag.DurationVar(&serverReadyWait,
 		"server-ready", 0, "wait until database server is ready, then continue")
@@ -78,12 +79,12 @@ func _main() error {
 		return nil
 	}
 
-	driverName, databaseURL, _ = dbmigrate.SanitizeDriverNameURL(driverName, databaseURL)
+	driverName, databaseURL, errctx = dbmigrate.SanitizeDriverNameURL(driverName, databaseURL)
 
 	if doServerReadyWait := serverReadyWait > 0; doServerReadyWait || doCreateDB || dbSchema != nil {
 		adapter, err := dbmigrate.AdapterFor(driverName)
 		if err != nil {
-			return err
+			return errors.Wrap(err, errctx.Error())
 		}
 
 		if doServerReadyWait {
@@ -92,12 +93,12 @@ func _main() error {
 			}
 			connString, _, err := adapter.BaseDatabaseURL(databaseURL)
 			if err != nil {
-				return err
+				return errors.Wrap(err, errctx.Error())
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), serverReadyWait)
 			defer cancel()
 			if err := dbmigrate.ReadyWait(ctx, driverName, []string{databaseURL, connString}, log.Println); err != nil {
-				return err
+				return errors.Wrap(err, errctx.Error())
 			}
 		}
 
@@ -110,14 +111,14 @@ func _main() error {
 			}
 			connString, dbName, err := adapter.BaseDatabaseURL(databaseURL)
 			if err != nil {
-				return err
+				return errors.Wrap(err, errctx.Error())
 			}
 			db, err := sql.Open(driverName, connString)
 			if err != nil {
 				return errors.Wrapf(err, "connect to db")
 			}
 			// leave errors for subsequent actions
-			_, _ = db.Exec(adapter.CreateDatabaseQuery(dbName))
+			_, errctx = db.Exec(adapter.CreateDatabaseQuery(dbName))
 			_ = db.Close()
 		}
 
@@ -130,14 +131,14 @@ func _main() error {
 				return errors.Wrapf(err, "connect to db")
 			}
 			// leave errors for subsequent actions
-			_, _ = db.Exec(adapter.CreateSchemaQuery(*dbSchema))
+			_, errctx = db.Exec(adapter.CreateSchemaQuery(*dbSchema))
 			_ = db.Close()
 		}
 	}
 
 	m, err := dbmigrate.New(os.DirFS(dirname), driverName, databaseURL)
 	if err != nil {
-		return err
+		return errors.Wrap(err, errctx.Error())
 	}
 	defer m.CloseDB()
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -147,7 +148,7 @@ func _main() error {
 	if doPendingVersions {
 		versions, err := m.PendingVersions(ctx, dbSchema)
 		if err != nil {
-			return err
+			return errors.Wrap(err, errctx.Error())
 		}
 		fmt.Println(strings.Join(versions, "\n"))
 		return nil

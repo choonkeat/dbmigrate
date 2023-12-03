@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # abort on any failure
-set -e
+set -euxo pipefail
 source `dirname $0`/lib.sh
 
 # setup
@@ -11,9 +11,6 @@ DB_MIGRATIONS_DIR=tests/db/migrations
 trap finish EXIT
 mkdir -p ${DB_MIGRATIONS_DIR}
 echo "testing ${DATABASE_DRIVER}..."
-
-# echo commands that we run
-# set -x
 
 # `-create` should work
 assert "should create new migration" ${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -create finally 'do! nothing??' 2>/dev/null
