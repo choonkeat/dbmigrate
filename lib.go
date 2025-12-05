@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"hash/crc32"
 	"io/fs"
 	"io/ioutil"
 	"net/url"
@@ -67,6 +68,22 @@ func (e *DbTxnModeConflictError) Error() string {
 	}
 	sb.WriteString("\nRun with: dbmigrate -up -db-txn-mode=per-file")
 	return sb.String()
+}
+
+// LockingNotSupportedError is returned when locking is required but not supported
+type LockingNotSupportedError struct {
+	DriverName string
+}
+
+func (e *LockingNotSupportedError) Error() string {
+	return fmt.Sprintf(`%s does not support cross-process locking.
+
+If you are certain only one migration process runs at a time, use:
+
+  dbmigrate -up -no-lock
+
+This is safe for single-process deployments (e.g., local development,
+single-node production with migrations run before app starts).`, e.DriverName)
 }
 
 // validateDbTxnMode checks if pending files are compatible with the transaction mode
@@ -146,6 +163,7 @@ type Config struct {
 	dir            fs.FS
 	db             *sql.DB
 	driverName     string
+	databaseName   string
 	adapter        Adapter
 	migrationFiles []string
 }
@@ -165,6 +183,17 @@ func New(dir fs.FS, driverName string, databaseURL string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Extract database name for lock ID
+	var databaseName string
+	if adapter.BaseDatabaseURL != nil {
+		_, databaseName, _ = adapter.BaseDatabaseURL(databaseURL)
+	}
+	if databaseName == "" {
+		// Fallback: use the whole URL as identifier
+		databaseName = databaseURL
+	}
+
 	db, err := sql.Open(driverName, databaseURL)
 	if err != nil {
 		return nil, errors.Wrapf(err, "unable to connect to -url")
@@ -194,6 +223,7 @@ func New(dir fs.FS, driverName string, databaseURL string) (*Config, error) {
 		dir:            dir,
 		db:             db,
 		driverName:     driverName,
+		databaseName:   databaseName,
 		adapter:        adapter,
 		migrationFiles: migrationFiles,
 	}, nil
@@ -207,6 +237,44 @@ func (c *Config) CloseDB() error {
 // DriverName returns the database driver name for this config
 func (c *Config) DriverName() string {
 	return c.driverName
+}
+
+// acquireLock acquires the migration lock, returns the connection holding the lock
+// Returns nil conn if noLock is true or adapter doesn't support locking
+func (c *Config) acquireLock(ctx context.Context, schema *string, noLock bool, log func(string)) (*sql.Conn, error) {
+	if noLock {
+		if c.adapter.SupportsLocking {
+			log("Warning: Running without cross-process locking. Concurrent migrations may cause corruption.")
+		}
+		return nil, nil
+	}
+
+	if !c.adapter.SupportsLocking {
+		return nil, &LockingNotSupportedError{DriverName: c.driverName}
+	}
+
+	conn, err := c.db.Conn(ctx)
+	if err != nil {
+		return nil, errors.Wrap(err, "unable to get connection for locking")
+	}
+
+	lockID := generateLockID(c.databaseName, schema, "dbmigrate_versions")
+	if err := c.adapter.AcquireLock(ctx, conn, fmt.Sprint(lockID), log); err != nil {
+		conn.Close()
+		return nil, errors.Wrap(err, "unable to acquire migration lock")
+	}
+
+	return conn, nil
+}
+
+// releaseLock releases the migration lock
+func (c *Config) releaseLock(ctx context.Context, conn *sql.Conn, schema *string) {
+	if conn == nil {
+		return
+	}
+	lockID := generateLockID(c.databaseName, schema, "dbmigrate_versions")
+	_ = c.adapter.ReleaseLock(ctx, conn, fmt.Sprint(lockID))
+	conn.Close()
 }
 
 func (c *Config) existingVersions(ctx context.Context, schema *string) (*trie.Trie, error) {
@@ -268,11 +336,18 @@ type ExecCommitRollbacker interface {
 // Transaction is committed on success, rollback on error. Different databases will behave
 // differently, e.g. postgres & sqlite3 can rollback DDL changes but mysql cannot
 func (c *Config) MigrateUp(ctx context.Context, txOpts *sql.TxOptions, schema *string, logFilename func(string)) error {
-	return c.MigrateUpWithMode(ctx, txOpts, schema, logFilename, DbTxnModeAll)
+	return c.MigrateUpWithMode(ctx, txOpts, schema, logFilename, DbTxnModeAll, false)
 }
 
 // MigrateUpWithMode applies pending migrations with the specified transaction mode
-func (c *Config) MigrateUpWithMode(ctx context.Context, txOpts *sql.TxOptions, schema *string, logFilename func(string), mode DbTxnMode) error {
+func (c *Config) MigrateUpWithMode(ctx context.Context, txOpts *sql.TxOptions, schema *string, logFilename func(string), mode DbTxnMode, noLock bool) error {
+	// Acquire lock
+	conn, err := c.acquireLock(ctx, schema, noLock, logFilename)
+	if err != nil {
+		return err
+	}
+	defer c.releaseLock(ctx, conn, schema)
+
 	migratedVersions, err := c.existingVersions(ctx, schema)
 	if err != nil {
 		return errors.Wrapf(err, "unable to query existing versions")
@@ -440,11 +515,18 @@ func (c *Config) migrateUpNoTx(ctx context.Context, schema *string, logFilename 
 // Transaction is committed on success, rollback on error. Different databases will behave
 // differently, e.g. postgres & sqlite3 can rollback DDL changes but mysql cannot
 func (c *Config) MigrateDown(ctx context.Context, txOpts *sql.TxOptions, schema *string, logFilename func(string), downStep int) error {
-	return c.MigrateDownWithMode(ctx, txOpts, schema, logFilename, downStep, DbTxnModeAll)
+	return c.MigrateDownWithMode(ctx, txOpts, schema, logFilename, downStep, DbTxnModeAll, false)
 }
 
 // MigrateDownWithMode un-applies migrations with the specified transaction mode
-func (c *Config) MigrateDownWithMode(ctx context.Context, txOpts *sql.TxOptions, schema *string, logFilename func(string), downStep int, mode DbTxnMode) error {
+func (c *Config) MigrateDownWithMode(ctx context.Context, txOpts *sql.TxOptions, schema *string, logFilename func(string), downStep int, mode DbTxnMode, noLock bool) error {
+	// Acquire lock
+	conn, err := c.acquireLock(ctx, schema, noLock, logFilename)
+	if err != nil {
+		return err
+	}
+	defer c.releaseLock(ctx, conn, schema)
+
 	migratedVersions, err := c.existingVersions(ctx, schema)
 	if err != nil {
 		return errors.Wrapf(err, "unable to query existing versions")
@@ -638,6 +720,23 @@ type Adapter struct {
 	CreateSchemaQuery      func(string) string                                        // nil means does NOT support -schema
 	BaseDatabaseURL        func(string) (connString string, dbName string, err error) // nil means does not support -server-ready nor -create-db
 	BeginTx                func(ctx context.Context, db *sql.DB, opts *sql.TxOptions) (ExecCommitRollbacker, error)
+	// Locking support for cross-process safety
+	SupportsLocking bool                                                                           // false means requires -no-lock flag
+	AcquireLock     func(ctx context.Context, conn *sql.Conn, lockID string, log func(string)) error // nil if SupportsLocking is false
+	ReleaseLock     func(ctx context.Context, conn *sql.Conn, lockID string) error                   // nil if SupportsLocking is false
+}
+
+// generateLockID creates a lock ID from database name, schema, and table name
+func generateLockID(databaseName string, schema *string, tableName string) int64 {
+	parts := []string{databaseName}
+	if schema != nil && *schema != "" {
+		parts = append(parts, *schema)
+	}
+	parts = append(parts, tableName)
+
+	input := strings.Join(parts, "\x00")
+	sum := crc32.ChecksumIEEE([]byte(input))
+	return int64(sum)
 }
 
 func fqName(schema *string, name string) string {
@@ -682,6 +781,29 @@ var adapters = map[string]Adapter{
 		BeginTx: func(ctx context.Context, db *sql.DB, opts *sql.TxOptions) (ExecCommitRollbacker, error) {
 			return db.BeginTx(ctx, opts)
 		},
+		SupportsLocking: true,
+		AcquireLock: func(ctx context.Context, conn *sql.Conn, lockID string, log func(string)) error {
+			for {
+				var acquired bool
+				err := conn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock($1)", lockID).Scan(&acquired)
+				if err != nil {
+					return err
+				}
+				if acquired {
+					return nil
+				}
+				log("Waiting for migration lock...")
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(2 * time.Second):
+				}
+			}
+		},
+		ReleaseLock: func(ctx context.Context, conn *sql.Conn, lockID string) error {
+			_, err := conn.ExecContext(ctx, "SELECT pg_advisory_unlock($1)", lockID)
+			return err
+		},
 	},
 	"mysql": {
 		CreateVersionsTable: func(_ *string) string {
@@ -707,6 +829,29 @@ var adapters = map[string]Adapter{
 		},
 		BeginTx: func(ctx context.Context, db *sql.DB, opts *sql.TxOptions) (ExecCommitRollbacker, error) {
 			return db.BeginTx(ctx, opts)
+		},
+		SupportsLocking: true,
+		AcquireLock: func(ctx context.Context, conn *sql.Conn, lockID string, log func(string)) error {
+			for {
+				var result sql.NullInt64
+				err := conn.QueryRowContext(ctx, "SELECT GET_LOCK(?, 0)", lockID).Scan(&result)
+				if err != nil {
+					return err
+				}
+				if result.Valid && result.Int64 == 1 {
+					return nil
+				}
+				log("Waiting for migration lock...")
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(2 * time.Second):
+				}
+			}
+		},
+		ReleaseLock: func(ctx context.Context, conn *sql.Conn, lockID string) error {
+			_, err := conn.ExecContext(ctx, "SELECT RELEASE_LOCK(?)", lockID)
+			return err
 		},
 	},
 }

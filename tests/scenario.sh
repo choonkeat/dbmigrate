@@ -211,3 +211,121 @@ fi
 ${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -db-txn-mode=none -down 999 2>/dev/null || true
 
 fi # end of if [ "$DATABASE_DRIVER" != "cql" ]
+
+# Test concurrent locking (only for databases that support locking)
+# sqlite3 and cql don't support locking, so skip
+if [ "$DATABASE_DRIVER" = "postgres" ] || [ "$DATABASE_DRIVER" = "mysql" ]; then
+
+# Number of concurrent processes (default 5, configurable via env)
+CONCURRENT_PROCESSES=${CONCURRENT_PROCESSES:-5}
+echo "Testing concurrent locking for ${DATABASE_DRIVER} with ${CONCURRENT_PROCESSES} processes..."
+
+# Setup: clean state with base table
+rm -f ${DB_MIGRATIONS_DIR}/2099*
+cp tests/db/${DATABASE_DRIVER}/20181222073546_create-products.* ${DB_MIGRATIONS_DIR}/
+${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -down 999 2>/dev/null || true
+${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -up 2>/dev/null
+
+# Create test migrations for concurrent test with slow operations to ensure contention
+# Use driver-specific sleep to increase the window for lock contention
+case $DATABASE_DRIVER in
+    postgres)
+        SLEEP_SQL="SELECT pg_sleep(1);"
+        ;;
+    mysql)
+        SLEEP_SQL="SELECT SLEEP(1);"
+        ;;
+esac
+cat > ${DB_MIGRATIONS_DIR}/20990201000001_concurrent-test.up.sql << SQLEOF
+INSERT INTO products (name, price) VALUES ('concurrent-test-1', 100);
+${SLEEP_SQL}
+SQLEOF
+cat > ${DB_MIGRATIONS_DIR}/20990201000001_concurrent-test.down.sql << 'SQLEOF'
+DELETE FROM products WHERE name = 'concurrent-test-1';
+SQLEOF
+cat > ${DB_MIGRATIONS_DIR}/20990201000002_concurrent-test.up.sql << SQLEOF
+INSERT INTO products (name, price) VALUES ('concurrent-test-2', 200);
+${SLEEP_SQL}
+SQLEOF
+cat > ${DB_MIGRATIONS_DIR}/20990201000002_concurrent-test.down.sql << 'SQLEOF'
+DELETE FROM products WHERE name = 'concurrent-test-2';
+SQLEOF
+
+# Run N migration processes concurrently
+# All should succeed - one applies migrations, others wait then find nothing to do
+echo "Starting ${CONCURRENT_PROCESSES} concurrent migration processes..."
+PIDS=()
+for i in $(seq 1 $CONCURRENT_PROCESSES); do
+    ${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -up > /tmp/migrate${i}.log 2>&1 &
+    PIDS+=($!)
+done
+
+# Wait for all processes and collect exit codes
+ALL_SUCCESS=true
+for i in $(seq 1 $CONCURRENT_PROCESSES); do
+    wait ${PIDS[$i-1]}
+    EXIT_CODE=$?
+    if [ "$EXIT_CODE" != "0" ]; then
+        ALL_SUCCESS=false
+        echo "Process $i failed with exit code $EXIT_CODE"
+    fi
+done
+
+# All should succeed
+if [ "$ALL_SUCCESS" = "true" ]; then
+    pass "concurrent: all ${CONCURRENT_PROCESSES} migration processes completed successfully"
+else
+    fail "concurrent: not all processes succeeded"
+    for i in $(seq 1 $CONCURRENT_PROCESSES); do
+        echo "=== Process $i log ===" && cat /tmp/migrate${i}.log
+    done
+    exit 1
+fi
+
+# Verify migrations applied exactly once (not zero, not twice)
+CONCURRENT_PENDING=$(${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -versions-pending 2>/dev/null)
+if [ -z "$CONCURRENT_PENDING" ]; then
+    pass "concurrent: no pending migrations (all applied)"
+else
+    fail "concurrent: expected no pending migrations, but got: $CONCURRENT_PENDING"
+    exit 1
+fi
+
+# Verify data: each row should exist exactly once
+CONCURRENT_COUNT1=$(check_row_count "concurrent-test-1")
+CONCURRENT_COUNT2=$(check_row_count "concurrent-test-2")
+if [ "$CONCURRENT_COUNT1" = "1" ] && [ "$CONCURRENT_COUNT2" = "1" ]; then
+    pass "concurrent: each migration applied exactly once (count=1)"
+else
+    fail "concurrent: expected count=1 for each, got concurrent-test-1=$CONCURRENT_COUNT1, concurrent-test-2=$CONCURRENT_COUNT2"
+    exit 1
+fi
+
+# Verify that lock contention actually occurred (at least one process waited)
+LOCK_WAIT_FOUND=false
+for i in $(seq 1 $CONCURRENT_PROCESSES); do
+    if grep -q "Waiting for migration lock" /tmp/migrate${i}.log; then
+        LOCK_WAIT_FOUND=true
+        break
+    fi
+done
+if [ "$LOCK_WAIT_FOUND" = "true" ]; then
+    pass "concurrent: lock contention verified (process waited for lock)"
+else
+    fail "concurrent: no lock contention detected - test inconclusive"
+    for i in $(seq 1 $CONCURRENT_PROCESSES); do
+        echo "=== Process $i log ===" && cat /tmp/migrate${i}.log
+    done
+    exit 1
+fi
+
+# Show which process did the work (informational)
+for i in $(seq 1 $CONCURRENT_PROCESSES); do
+    echo "=== Process $i log ===" && cat /tmp/migrate${i}.log
+done
+
+# Cleanup
+${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -down 999 2>/dev/null || true
+rm -f /tmp/migrate*.log
+
+fi # end of concurrent locking test

@@ -2,7 +2,7 @@
 
 This plan implements 3 changes in small, testable steps:
 1. ✅ `.no-db-txn.` filename marker + `-db-txn-mode` flag
-2. Cross-process locking with `-no-lock` opt-out
+2. ✅ Cross-process locking with `-no-lock` opt-out
 3. MySQL DDL warning
 
 ---
@@ -795,7 +795,7 @@ go build ./cmd/dbmigrate
 
 ---
 
-## Phase 2: Cross-Process Locking
+## Phase 2: Cross-Process Locking ✅ COMPLETE
 
 ### Step 2.1: Add locking fields to Adapter struct
 
@@ -1332,6 +1332,23 @@ make test
 - ✅ mariadb: PASS
 - ✅ sqlite3: PASS (now using `-no-lock`)
 - ✅ cql: PASS (now using `-no-lock`)
+
+### Phase 2 Completion Notes
+
+**Implementation details:**
+- PostgreSQL uses `pg_try_advisory_lock` / `pg_advisory_unlock` for locking
+- MySQL uses `GET_LOCK` / `RELEASE_LOCK` for locking
+- SQLite and CQL adapters marked as `SupportsLocking: false`
+- Lock ID generated using CRC32 hash of database name, schema, and table name
+- Locking uses `sql.Conn` to ensure lock is held on same connection throughout migration
+- Added `-no-lock` flag to CLI for SQLite/CQL (required) and optionally for other databases
+
+**Test verification:**
+- SQLite tests first verify failure without `-no-lock`, then run with `-no-lock`
+- CQL tests first verify failure without `-no-lock`, then run with `-no-lock`
+- PostgreSQL and MySQL tests run with locking enabled (default)
+- Tests serve as living documentation that sqlite3/cql require `-no-lock`
+- All tests pass for sqlite3, postgres, mysql databases
 
 ---
 

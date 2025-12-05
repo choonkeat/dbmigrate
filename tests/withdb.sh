@@ -60,7 +60,15 @@ case $DATABASE_DRIVER in
             pass "should not support -create-db"
         fi
     fi
-    env DATABASE_DRIVER=sqlite3 DBMIGRATE_OPT="" DATABASE_URL="./tests/sqlite3.db" DB_MIGRATIONS_DIR=${DB_MIGRATIONS_DIR} bash ${TARGET_SCRIPT}
+    # Test that locking is required (should fail without -no-lock)
+    if env DATABASE_DRIVER=sqlite3 DBMIGRATE_OPT="" DATABASE_URL="./tests/sqlite3.db" DB_MIGRATIONS_DIR=${DB_MIGRATIONS_DIR} bash ${TARGET_SCRIPT}; then
+        fail "should require -no-lock flag"
+        exit 1
+    else
+        pass "should require -no-lock flag"
+    fi
+    # Now run with -no-lock
+    env DATABASE_DRIVER=sqlite3 DBMIGRATE_OPT="-no-lock" DATABASE_URL="./tests/sqlite3.db" DB_MIGRATIONS_DIR=${DB_MIGRATIONS_DIR} bash ${TARGET_SCRIPT}
     rm -f "./tests/sqlite3.db"
     ;;
     cql)
@@ -78,7 +86,15 @@ case $DATABASE_DRIVER in
         fail "unexpected error pre-creating keyspace ${DB_NAME}; retrying..."
         sleep 1
     done
-    env DATABASE_DRIVER=cql DBMIGRATE_OPT="-server-ready ${SERVER_READY}" DATABASE_URL="localhost:${PORT}?keyspace=${DB_NAME}&timeout=3m" DB_MIGRATIONS_DIR=${DB_MIGRATIONS_DIR} bash ${TARGET_SCRIPT}
+    # Test that locking is required (should fail without -no-lock)
+    if env DATABASE_DRIVER=cql DBMIGRATE_OPT="-server-ready ${SERVER_READY}" DATABASE_URL="localhost:${PORT}?keyspace=${DB_NAME}&timeout=3m" DB_MIGRATIONS_DIR=${DB_MIGRATIONS_DIR} bash ${TARGET_SCRIPT}; then
+        fail "should require -no-lock flag"
+        exit 1
+    else
+        pass "should require -no-lock flag"
+    fi
+    # Now run with -no-lock
+    env DATABASE_DRIVER=cql DBMIGRATE_OPT="-server-ready ${SERVER_READY} -no-lock" DATABASE_URL="localhost:${PORT}?keyspace=${DB_NAME}&timeout=3m" DB_MIGRATIONS_DIR=${DB_MIGRATIONS_DIR} bash ${TARGET_SCRIPT}
     finish
     ;;
     *)

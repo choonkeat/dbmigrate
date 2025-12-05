@@ -40,6 +40,7 @@ func _main() error {
 		driverName        string
 		timeout           time.Duration
 		dbTxnMode         string
+		noLock            bool
 		errctx            error
 	)
 
@@ -67,6 +68,8 @@ func _main() error {
 		"timeout", 5*time.Minute, "database timeout")
 	flag.StringVar(&dbTxnMode,
 		"db-txn-mode", "all", "transaction mode: all (default, existing behavior), per-file, or none")
+	flag.BoolVar(&noLock,
+		"no-lock", false, "skip cross-process locking (required for sqlite3, cql)")
 	flag.Parse()
 
 	// 1. CREATE new migration; exit
@@ -163,7 +166,7 @@ func _main() error {
 		if err != nil {
 			return err
 		}
-		return m.MigrateUpWithMode(ctx, &sql.TxOptions{}, dbSchema, filenameLogger("[up]"), mode)
+		return m.MigrateUpWithMode(ctx, &sql.TxOptions{}, dbSchema, filenameLogger("[up]"), mode, noLock)
 	}
 
 	// 4. MIGRATE DOWN; exit
@@ -172,7 +175,7 @@ func _main() error {
 		if err != nil {
 			return err
 		}
-		return m.MigrateDownWithMode(ctx, &sql.TxOptions{}, dbSchema, filenameLogger("[down]"), doMigrateDown, mode)
+		return m.MigrateDownWithMode(ctx, &sql.TxOptions{}, dbSchema, filenameLogger("[down]"), doMigrateDown, mode, noLock)
 	}
 
 	// None of the above, fail

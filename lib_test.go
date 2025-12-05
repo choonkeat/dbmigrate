@@ -138,6 +138,13 @@ func TestDbTxnModeConflictError(t *testing.T) {
 	assert.Contains(t, msg, "-db-txn-mode=per-file")
 }
 
+func TestLockingNotSupportedError(t *testing.T) {
+	err := &LockingNotSupportedError{DriverName: "sqlite3"}
+	msg := err.Error()
+	assert.Contains(t, msg, "sqlite3 does not support cross-process locking")
+	assert.Contains(t, msg, "-no-lock")
+}
+
 func TestRequiresNoTransaction(t *testing.T) {
 	tests := []struct {
 		filename string
@@ -197,6 +204,33 @@ func TestParseDbTxnMode(t *testing.T) {
 			assert.Equal(t, tc.expected, mode)
 		}
 	}
+}
+
+func TestGenerateLockID(t *testing.T) {
+	schema := "myschema"
+	tests := []struct {
+		name   string
+		dbName string
+		schema *string
+		table  string
+	}{
+		{"basic", "mydb", nil, "dbmigrate_versions"},
+		{"with schema", "mydb", &schema, "dbmigrate_versions"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			id := generateLockID(tc.dbName, tc.schema, tc.table)
+			assert.NotZero(t, id)
+			// Same inputs should produce same ID
+			id2 := generateLockID(tc.dbName, tc.schema, tc.table)
+			assert.Equal(t, id, id2)
+		})
+	}
+
+	// Different inputs should produce different IDs
+	id1 := generateLockID("db1", nil, "dbmigrate_versions")
+	id2 := generateLockID("db2", nil, "dbmigrate_versions")
+	assert.NotEqual(t, id1, id2)
 }
 
 func TestBaseDatabaseURL(t *testing.T) {

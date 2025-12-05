@@ -24,5 +24,8 @@ func init() {
 		BeginTx: func(ctx context.Context, db *sql.DB, opts *sql.TxOptions) (dbmigrate.ExecCommitRollbacker, error) {
 			return db.BeginTx(ctx, opts)
 		},
+		SupportsLocking: false,
+		AcquireLock:     nil,
+		ReleaseLock:     nil,
 	})
 }
