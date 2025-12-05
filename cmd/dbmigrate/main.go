@@ -73,6 +73,29 @@ func _main() error {
 		"db-txn-mode", "all", "transaction mode: all (default, existing behavior), per-file, or none")
 	flag.BoolVar(&noLock,
 		"no-lock", false, "skip cross-process locking (required for sqlite3, cql)")
+
+	// Custom usage to group related flags
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: %s [options] [description...]\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Create migration files:\n")
+		fmt.Fprintf(os.Stderr, "  -create\n\tadd new migration files into -dir\n")
+		fmt.Fprintf(os.Stderr, "  -create-no-db-txn\n\tadd new .no-db-txn. migration files into -dir\n\t(for CREATE INDEX CONCURRENTLY, etc.)\n")
+		fmt.Fprintf(os.Stderr, "  -dir string\n\tdirectory storing all the *.sql files (default \"db/migrations\")\n")
+		fmt.Fprintf(os.Stderr, "\nRun migrations:\n")
+		fmt.Fprintf(os.Stderr, "  -up\n\tperform migrations in sequence\n")
+		fmt.Fprintf(os.Stderr, "  -down int\n\tundo the last N applied migrations\n")
+		fmt.Fprintf(os.Stderr, "  -versions-pending\n\tshow versions in -dir but not applied in -url database\n")
+		fmt.Fprintf(os.Stderr, "  -db-txn-mode string\n\ttransaction mode: all (default), per-file, or none\n")
+		fmt.Fprintf(os.Stderr, "  -no-lock\n\tskip cross-process locking (required for sqlite3, cql)\n")
+		fmt.Fprintf(os.Stderr, "\nDatabase connection:\n")
+		fmt.Fprintf(os.Stderr, "  -url string\n\tconnection string (default $DATABASE_URL)\n")
+		fmt.Fprintf(os.Stderr, "  -driver string\n\tdriver name, e.g. postgres (default $DATABASE_DRIVER)\n")
+		fmt.Fprintf(os.Stderr, "  -timeout duration\n\tdatabase timeout (default 5m0s)\n")
+		fmt.Fprintf(os.Stderr, "\nDatabase setup (run before migrations):\n")
+		fmt.Fprintf(os.Stderr, "  -server-ready duration\n\twait until database server is ready, then continue\n")
+		fmt.Fprintf(os.Stderr, "  -create-db\n\tcreate database (ignore errors), then continue\n")
+		fmt.Fprintf(os.Stderr, "  -schema string\n\tcreate schema if necessary (ignore errors), then continue\n")
+	}
 	flag.Parse()
 
 	// 1. CREATE new migration; exit
