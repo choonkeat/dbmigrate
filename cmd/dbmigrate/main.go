@@ -28,11 +28,12 @@ func main() {
 
 func _main() error {
 	var (
-		serverReadyWait   time.Duration
-		doCreateDB        bool
-		dbSchema          *string
-		doCreateMigration bool
-		doPendingVersions bool
+		serverReadyWait        time.Duration
+		doCreateDB             bool
+		dbSchema               *string
+		doCreateMigration      bool
+		doCreateMigrationNoTxn bool
+		doPendingVersions      bool
 		doMigrateUp       bool
 		doMigrateDown     int
 		dirname           string
@@ -52,6 +53,8 @@ func _main() error {
 	dbSchema = flag.String("schema", "", "create schema if necessary (ignore errors), then continue")
 	flag.BoolVar(&doCreateMigration,
 		"create", false, "add new migration files into -dir")
+	flag.BoolVar(&doCreateMigrationNoTxn,
+		"create-no-db-txn", false, "add new .no-db-txn. migration files into -dir (for CREATE INDEX CONCURRENTLY, etc.)")
 	flag.BoolVar(&doPendingVersions,
 		"versions-pending", false, "show versions in `-dir` but not applied in `-url` database")
 	flag.BoolVar(&doMigrateUp,
@@ -73,13 +76,17 @@ func _main() error {
 	flag.Parse()
 
 	// 1. CREATE new migration; exit
-	if doCreateMigration {
+	if doCreateMigration || doCreateMigrationNoTxn {
 		description := strings.Join(flag.Args(), " ")
 		name := versionedName(time.Now(), description)
 		if err := os.MkdirAll(dirname, 0o755); err != nil {
 			return errors.Wrapf(err, "failed to create -dir %q", dirname)
 		}
-		if err := writeFile(dirname, name); err != nil {
+		marker := ""
+		if doCreateMigrationNoTxn {
+			marker = ".no-db-txn"
+		}
+		if err := writeFile(dirname, name, marker); err != nil {
 			return errors.Wrapf(err, "failed to write into -dir %q", dirname)
 		}
 		return nil
@@ -179,7 +186,7 @@ func _main() error {
 	}
 
 	// None of the above, fail
-	return errors.Errorf("no operation: must be either `-create`, `-versions-pending`, `-up`, or `-down 1`")
+	return errors.Errorf("no operation: must be either `-create`, `-create-no-db-txn`, `-versions-pending`, `-up`, or `-down 1`")
 }
 
 func filenameLogger(prefix string) func(string) {
@@ -201,8 +208,9 @@ func versionedName(now time.Time, description string) string {
 	)
 }
 
-func writeFile(dirname, name string) error {
-	upfile, downfile := path.Join(dirname, name+".up.sql"), path.Join(dirname, name+".down.sql")
+func writeFile(dirname, name, marker string) error {
+	upfile := path.Join(dirname, name+marker+".up.sql")
+	downfile := path.Join(dirname, name+marker+".down.sql")
 	log.Println("writing", upfile)
 	err := ioutil.WriteFile(upfile, []byte(nil), 0o644)
 	if err != nil {

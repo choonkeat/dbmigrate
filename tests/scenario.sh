@@ -53,9 +53,12 @@ assert_equal "tests/db/${DATABASE_DRIVER}/VERSIONS-07.after-down-999" "${PENDING
 # First, apply all regular migrations
 assert "apply all migrations for txn-mode tests" ${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -up 2>/dev/null
 
-# Create a .no-db-txn. migration (empty files work across all drivers)
-touch ${DB_MIGRATIONS_DIR}/20991231235959_test-no-txn.no-db-txn.up.sql
-touch ${DB_MIGRATIONS_DIR}/20991231235959_test-no-txn.no-db-txn.down.sql
+# Create a .no-db-txn. migration using -create-no-db-txn flag (exercises CLI feature)
+# Sleep to ensure unique timestamp (version based on current second)
+sleep 1
+assert "should create .no-db-txn. files with -create-no-db-txn" ./dbmigrate -dir ${DB_MIGRATIONS_DIR} -create-no-db-txn test no txn
+assert "should have created .no-db-txn.up.sql" test -f ${DB_MIGRATIONS_DIR}/*_test-no-txn.no-db-txn.up.sql
+assert "should have created .no-db-txn.down.sql" test -f ${DB_MIGRATIONS_DIR}/*_test-no-txn.no-db-txn.down.sql
 
 # Should fail with default mode (all) when .no-db-txn. files exist
 assert_fail "should fail with -db-txn-mode=all when .no-db-txn. files pending" ${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -up 2>&1
@@ -69,8 +72,9 @@ assert "migrate down the no-txn migration" ${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS
 # Should also succeed with -db-txn-mode=none
 assert "should succeed with -db-txn-mode=none" ${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -db-txn-mode=none -up 2>/dev/null
 
-# Clean up: migrate everything down
+# Clean up: migrate everything down and remove .no-db-txn. test files
 assert "final cleanup - migrate down all" ${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -db-txn-mode=per-file -down 999 2>/dev/null
+rm -f ${DB_MIGRATIONS_DIR}/*_test-no-txn.no-db-txn.*.sql
 
 # Test -db-txn-mode transaction behavior differences
 # Same setup, three different outcomes based on mode
