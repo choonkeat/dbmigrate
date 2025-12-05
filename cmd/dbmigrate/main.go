@@ -20,6 +20,8 @@ import (
 	_ "github.com/lib/pq"
 )
 
+const Version = "3.0.0"
+
 func main() {
 	if err := _main(); err != nil {
 		log.Fatalln(err.Error())
@@ -34,15 +36,16 @@ func _main() error {
 		doCreateMigration      bool
 		doCreateMigrationNoTxn bool
 		doPendingVersions      bool
-		doMigrateUp       bool
-		doMigrateDown     int
-		dirname           string
-		databaseURL       string
-		driverName        string
-		timeout           time.Duration
-		dbTxnMode         string
-		noLock            bool
-		errctx            error
+		doMigrateUp            bool
+		doMigrateDown          int
+		dirname                string
+		databaseURL            string
+		driverName             string
+		timeout                time.Duration
+		dbTxnMode              string
+		noLock                 bool
+		wantedCLIVersion       string
+		errctx                 error
 	)
 
 	// options
@@ -73,6 +76,8 @@ func _main() error {
 		"db-txn-mode", "all", "transaction mode: all (default, existing behavior), per-file, or none")
 	flag.BoolVar(&noLock,
 		"no-lock", false, "skip cross-process locking (required for sqlite3, cql)")
+	flag.StringVar(&wantedCLIVersion,
+		"wanted-cli-version", "", "fail if binary version doesn't match this value")
 
 	// Custom usage to group related flags
 	flag.Usage = func() {
@@ -95,8 +100,15 @@ func _main() error {
 		fmt.Fprintf(os.Stderr, "  -server-ready duration\n\twait until database server is ready, then continue\n")
 		fmt.Fprintf(os.Stderr, "  -create-db\n\tcreate database (ignore errors), then continue\n")
 		fmt.Fprintf(os.Stderr, "  -schema string\n\tcreate schema if necessary (ignore errors), then continue\n")
+		fmt.Fprintf(os.Stderr, "\nOther:\n")
+		fmt.Fprintf(os.Stderr, "  -wanted-cli-version string\n\tfail if binary version doesn't match (current: %s)\n", Version)
 	}
 	flag.Parse()
+
+	// 0. VERSION check; fail early if mismatch
+	if wantedCLIVersion != "" && wantedCLIVersion != Version {
+		return errors.Errorf("version mismatch: wanted %q but binary is %q", wantedCLIVersion, Version)
+	}
 
 	// 1. CREATE new migration; exit
 	if doCreateMigration || doCreateMigrationNoTxn {

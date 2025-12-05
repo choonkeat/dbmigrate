@@ -232,6 +232,24 @@ $ dbmigrate -create-no-db-txn add index concurrently
 
 Files with `.no-db-txn.` in the filename will be executed outside of any transaction, regardless of the `-db-txn-mode` setting.
 
+### Enforce CLI version
+
+To ensure all team members use the same dbmigrate version, add `-wanted-cli-version` to your migration commands:
+
+```
+$ dbmigrate -wanted-cli-version 3.0.0 -up
+2024/01/15 10:30:00 [up] 20240115103000_add-users.up.sql
+```
+
+If someone has a different version installed, the command fails immediately:
+
+```
+$ dbmigrate -wanted-cli-version 3.0.0 -up
+2024/01/15 10:30:00 version mismatch: wanted "3.0.0" but binary is "2.2.2"
+```
+
+This is useful in CI/CD pipelines or team environments where version consistency matters.
+
 ### Migrate up
 
 ```
