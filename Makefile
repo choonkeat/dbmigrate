@@ -1,5 +1,6 @@
 DATABASE_DRIVERS=cql sqlite3 postgres mariadb mysql
 BUILD_TARGET=./cmd/dbmigrate/*.go
+VERSION=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 
 test-clean:
 	rm -rf tests/db/migrations
@@ -12,7 +13,7 @@ test: test-clean build
 	done
 
 build:
-	go build -o dbmigrate $(BUILD_TARGET)
+	go build -ldflags "-X main.Version=$(VERSION)" -o dbmigrate $(BUILD_TARGET)
 
 build-docker:
 	tar -c Dockerfile go.* *.go cmd | gzip -9 | docker build -f Dockerfile - -t dbmigrate

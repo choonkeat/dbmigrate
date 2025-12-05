@@ -20,7 +20,8 @@ import (
 	_ "github.com/lib/pq"
 )
 
-const Version = "3.0.0"
+// Version is set at build time via -ldflags "-X main.Version=..."
+var Version = "dev"
 
 func main() {
 	if err := _main(); err != nil {

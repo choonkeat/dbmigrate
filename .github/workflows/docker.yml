@@ -29,6 +29,8 @@ jobs:
         with:
           context: .
           push: true
+          build-args: |
+            VERSION=${{ steps.version.outputs.VERSION }}
           tags: |
             choonkeat/dbmigrate:latest
             choonkeat/dbmigrate:${{ steps.version.outputs.VERSION }}
