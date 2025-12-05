@@ -1,6 +1,7 @@
 package dbmigrate
 
 import (
+	"errors"
 	"fmt"
 	"runtime"
 	"testing"
@@ -77,6 +78,124 @@ func TestSanitizeDriverNameURL(t *testing.T) {
 			assert.Equal(t, tc.expectedDriverName, actualDriverName, "driver name")
 			assert.Equal(t, tc.expectedDatabaseURL, actualDatabaseURL, "database url")
 		})
+	}
+}
+
+func TestValidateDbTxnMode(t *testing.T) {
+	tests := []struct {
+		name    string
+		files   []string
+		mode    DbTxnMode
+		wantErr bool
+	}{
+		{
+			name:    "all mode with normal files",
+			files:   []string{"20240101_create.up.sql", "20240102_add.up.sql"},
+			mode:    DbTxnModeAll,
+			wantErr: false,
+		},
+		{
+			name:    "all mode with no-db-txn file",
+			files:   []string{"20240101_create.up.sql", "20240102_add.no-db-txn.up.sql"},
+			mode:    DbTxnModeAll,
+			wantErr: true,
+		},
+		{
+			name:    "per-file mode with no-db-txn file",
+			files:   []string{"20240101_create.up.sql", "20240102_add.no-db-txn.up.sql"},
+			mode:    DbTxnModePerFile,
+			wantErr: false,
+		},
+		{
+			name:    "none mode with no-db-txn file",
+			files:   []string{"20240101_create.up.sql", "20240102_add.no-db-txn.up.sql"},
+			mode:    DbTxnModeNone,
+			wantErr: false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateDbTxnMode(tc.files, tc.mode)
+			if tc.wantErr {
+				assert.Error(t, err)
+				var conflictErr *DbTxnModeConflictError
+				assert.True(t, errors.As(err, &conflictErr))
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestDbTxnModeConflictError(t *testing.T) {
+	err := &DbTxnModeConflictError{
+		Files:       []string{"20240101130000_add_index.no-db-txn.up.sql"},
+		CurrentMode: DbTxnModeAll,
+	}
+	msg := err.Error()
+	assert.Contains(t, msg, "Cannot apply migrations in -db-txn-mode=all")
+	assert.Contains(t, msg, "20240101130000_add_index.no-db-txn.up.sql")
+	assert.Contains(t, msg, "-db-txn-mode=per-file")
+}
+
+func TestRequiresNoTransaction(t *testing.T) {
+	tests := []struct {
+		filename string
+		expected bool
+	}{
+		{"20240101120000_create_users.up.sql", false},
+		{"20240101120000_create_users.down.sql", false},
+		{"20240101130000_add_index.no-db-txn.up.sql", true},
+		{"20240101130000_add_index.no-db-txn.down.sql", true},
+		{"some/path/20240101130000_add_index.no-db-txn.up.sql", true},
+		// Partial matches should not trigger (exact ".no-db-txn." required)
+		{"20240101130000_add_index.no-db-txnup.sql", false},  // missing trailing dot
+		{"20240101130000_add_indexno-db-txn.up.sql", false},  // missing leading dot
+		{"20240101130000_add_index.no-db-tx.up.sql", false},  // truncated marker
+		{"20240101130000_add_index.o-db-txn.up.sql", false},  // missing 'n' at start
+		// Case mismatches should not trigger (exact ".no-db-txn." required)
+		{"20240101130000_add_index.No-Db-Txn.up.sql", false},
+		{"20240101130000_add_index.NO-DB-TXN.up.sql", false},
+	}
+	for _, tc := range tests {
+		result := requiresNoTransaction(tc.filename)
+		assert.Equal(t, tc.expected, result, "filename: %s", tc.filename)
+	}
+}
+
+func TestParseDbTxnMode(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected DbTxnMode
+		wantErr  bool
+	}{
+		{"all", DbTxnModeAll, false},
+		{"per-file", DbTxnModePerFile, false},
+		{"none", DbTxnModeNone, false},
+		{"invalid", "", true},
+		{"", "", true},
+		// Partial matches should fail (exact match required)
+		{"al", "", true},        // "all" missing last char
+		{"ll", "", true},        // "all" missing first char
+		{"per-fil", "", true},   // "per-file" missing last char
+		{"er-file", "", true},   // "per-file" missing first char
+		{"non", "", true},       // "none" missing last char
+		// Case mismatches should fail (exact match required)
+		{"All", "", true},
+		{"ALL", "", true},
+		{"Per-File", "", true},
+		{"PER-FILE", "", true},
+		{"None", "", true},
+		{"NONE", "", true},
+	}
+	for _, tc := range tests {
+		mode, err := ParseDbTxnMode(tc.input)
+		if tc.wantErr {
+			assert.Error(t, err)
+		} else {
+			assert.NoError(t, err)
+			assert.Equal(t, tc.expected, mode)
+		}
 	}
 }
 

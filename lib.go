@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"fmt"
 	"io/fs"
 	"io/ioutil"
 	"net/url"
@@ -15,6 +16,79 @@ import (
 	"github.com/derekparker/trie"
 	"github.com/pkg/errors"
 )
+
+// DbTxnMode controls how migrations are wrapped in transactions
+type DbTxnMode string
+
+const (
+	// DbTxnModeAll wraps all pending migrations in a single transaction (existing behavior)
+	DbTxnModeAll DbTxnMode = "all"
+	// DbTxnModePerFile wraps each migration file in its own transaction
+	DbTxnModePerFile DbTxnMode = "per-file"
+	// DbTxnModeNone runs migrations without transaction wrapping
+	DbTxnModeNone DbTxnMode = "none"
+)
+
+// ValidDbTxnModes lists all valid transaction mode values
+var ValidDbTxnModes = []DbTxnMode{DbTxnModeAll, DbTxnModePerFile, DbTxnModeNone}
+
+// ParseDbTxnMode parses a string into DbTxnMode, returns error if invalid
+func ParseDbTxnMode(s string) (DbTxnMode, error) {
+	mode := DbTxnMode(s)
+	for _, valid := range ValidDbTxnModes {
+		if mode == valid {
+			return mode, nil
+		}
+	}
+	return "", errors.Errorf("invalid -db-txn-mode %q: must be one of: all, per-file, none", s)
+}
+
+const noDbTxnMarker = ".no-db-txn."
+
+// requiresNoTransaction returns true if filename contains the .no-db-txn. marker
+func requiresNoTransaction(filename string) bool {
+	return strings.Contains(filename, noDbTxnMarker)
+}
+
+// DbTxnModeConflictError is returned when .no-db-txn. files exist but mode is not "per-file" or "none"
+type DbTxnModeConflictError struct {
+	Files       []string
+	CurrentMode DbTxnMode
+}
+
+func (e *DbTxnModeConflictError) Error() string {
+	var sb strings.Builder
+	sb.WriteString("Error: Cannot apply migrations in -db-txn-mode=all (default)\n\n")
+	sb.WriteString("The following migrations require -db-txn-mode=per-file:\n")
+	for _, f := range e.Files {
+		sb.WriteString("  - ")
+		sb.WriteString(f)
+		sb.WriteString("\n")
+	}
+	sb.WriteString("\nRun with: dbmigrate -up -db-txn-mode=per-file")
+	return sb.String()
+}
+
+// validateDbTxnMode checks if pending files are compatible with the transaction mode
+// Returns error if mode is "all" but .no-db-txn. files exist
+func validateDbTxnMode(files []string, mode DbTxnMode) error {
+	if mode != DbTxnModeAll {
+		return nil
+	}
+	var conflicts []string
+	for _, f := range files {
+		if requiresNoTransaction(f) {
+			conflicts = append(conflicts, f)
+		}
+	}
+	if len(conflicts) > 0 {
+		return &DbTxnModeConflictError{
+			Files:       conflicts,
+			CurrentMode: mode,
+		}
+	}
+	return nil
+}
 
 // RequireDriverName to indicate explicit driver name
 var RequireDriverName = errors.Errorf("Cannot discern db driver. Please set -driver flag or DATABASE_DRIVER environment variable.")
@@ -71,6 +145,7 @@ func ReadyWait(ctx context.Context, driverName string, databaseURLs []string, lo
 type Config struct {
 	dir            fs.FS
 	db             *sql.DB
+	driverName     string
 	adapter        Adapter
 	migrationFiles []string
 }
@@ -118,6 +193,7 @@ func New(dir fs.FS, driverName string, databaseURL string) (*Config, error) {
 	return &Config{
 		dir:            dir,
 		db:             db,
+		driverName:     driverName,
 		adapter:        adapter,
 		migrationFiles: migrationFiles,
 	}, nil
@@ -126,6 +202,11 @@ func New(dir fs.FS, driverName string, databaseURL string) (*Config, error) {
 // CloseDB should be run when Config is no longer in use; ideally `defer CloseDB` after every `New`
 func (c *Config) CloseDB() error {
 	return c.db.Close()
+}
+
+// DriverName returns the database driver name for this config
+func (c *Config) DriverName() string {
+	return c.driverName
 }
 
 func (c *Config) existingVersions(ctx context.Context, schema *string) (*trie.Trie, error) {
@@ -187,33 +268,64 @@ type ExecCommitRollbacker interface {
 // Transaction is committed on success, rollback on error. Different databases will behave
 // differently, e.g. postgres & sqlite3 can rollback DDL changes but mysql cannot
 func (c *Config) MigrateUp(ctx context.Context, txOpts *sql.TxOptions, schema *string, logFilename func(string)) error {
+	return c.MigrateUpWithMode(ctx, txOpts, schema, logFilename, DbTxnModeAll)
+}
+
+// MigrateUpWithMode applies pending migrations with the specified transaction mode
+func (c *Config) MigrateUpWithMode(ctx context.Context, txOpts *sql.TxOptions, schema *string, logFilename func(string), mode DbTxnMode) error {
 	migratedVersions, err := c.existingVersions(ctx, schema)
 	if err != nil {
 		return errors.Wrapf(err, "unable to query existing versions")
 	}
-
-	tx, err := c.adapter.BeginTx(ctx, c.db, txOpts)
-	if err != nil {
-		return errors.Wrapf(err, "unable to create transaction")
-	}
-	defer tx.Rollback() // ok to fail rollback if we did `tx.Commit`
 
 	migrationFiles := c.migrationFiles
 	sort.SliceStable(migrationFiles, func(i int, j int) bool {
 		return strings.Compare(migrationFiles[i], migrationFiles[j]) == -1 // in ascending order
 	})
 
+	// Collect pending files for validation
+	var pendingFiles []string
 	for i := range migrationFiles {
 		currName := migrationFiles[i]
 		if !strings.HasSuffix(currName, "up.sql") {
-			continue // skip if this isn't a `up.sql`
+			continue
 		}
 		currVer := strings.Split(currName, "_")[0]
 		if _, found := migratedVersions.Find(currVer); found {
-			continue // skip if we've migrated this version
+			continue
 		}
+		pendingFiles = append(pendingFiles, currName)
+	}
 
-		// read the file, run the sql and insert a row into `dbmigrate_versions`
+	// Validate transaction mode compatibility
+	if err := validateDbTxnMode(pendingFiles, mode); err != nil {
+		return err
+	}
+
+	// Dispatch to appropriate migration strategy
+	switch mode {
+	case DbTxnModeAll:
+		return c.migrateUpAll(ctx, txOpts, schema, logFilename, pendingFiles)
+	case DbTxnModePerFile:
+		return c.migrateUpPerFile(ctx, txOpts, schema, logFilename, pendingFiles)
+	case DbTxnModeNone:
+		return c.migrateUpNoTx(ctx, schema, logFilename, pendingFiles)
+	default:
+		return errors.Errorf("unknown transaction mode: %s", mode)
+	}
+}
+
+// migrateUpAll runs all pending migrations in a single transaction (existing behavior)
+func (c *Config) migrateUpAll(ctx context.Context, txOpts *sql.TxOptions, schema *string, logFilename func(string), pendingFiles []string) error {
+	tx, err := c.adapter.BeginTx(ctx, c.db, txOpts)
+	if err != nil {
+		return errors.Wrapf(err, "unable to create transaction")
+	}
+	defer tx.Rollback()
+
+	for _, currName := range pendingFiles {
+		currVer := strings.Split(currName, "_")[0]
+
 		filecontent, err := c.fileContent(currName)
 		if err != nil {
 			return errors.Wrapf(err, currName)
@@ -229,11 +341,98 @@ func (c *Config) MigrateUp(ctx context.Context, txOpts *sql.TxOptions, schema *s
 		}
 		logFilename(currName)
 	}
+
 	err = tx.Commit()
 	if err != nil && err.Error() == "pq: unexpected transaction status idle" {
-		return nil // ignore this error
+		return nil
 	}
 	return errors.Wrapf(err, "unable to commit transaction")
+}
+
+// migrateUpPerFile runs each migration in its own transaction
+// .no-db-txn. files run without transaction
+func (c *Config) migrateUpPerFile(ctx context.Context, txOpts *sql.TxOptions, schema *string, logFilename func(string), pendingFiles []string) error {
+	applied := 0
+	for _, currName := range pendingFiles {
+		currVer := strings.Split(currName, "_")[0]
+
+		filecontent, err := c.fileContent(currName)
+		if err != nil {
+			return errors.Wrapf(err, currName)
+		}
+
+		if requiresNoTransaction(currName) {
+			// Run without transaction
+			if len(bytes.TrimSpace(filecontent)) > 0 {
+				if _, err := c.db.ExecContext(ctx, string(filecontent)); err != nil {
+					if applied > 0 {
+						logFilename(fmt.Sprintf("%d migrations applied before failure.", applied))
+					}
+					return errors.Wrapf(err, currName)
+				}
+			}
+			if _, err := c.db.ExecContext(ctx, c.adapter.InsertNewVersion(schema), currVer); err != nil {
+				return errors.Wrapf(err, "fail to register version %q", currVer)
+			}
+		} else {
+			// Run in transaction
+			tx, err := c.adapter.BeginTx(ctx, c.db, txOpts)
+			if err != nil {
+				return errors.Wrapf(err, "unable to create transaction for %s", currName)
+			}
+
+			if len(bytes.TrimSpace(filecontent)) > 0 {
+				if _, err := tx.ExecContext(ctx, string(filecontent)); err != nil {
+					tx.Rollback()
+					if applied > 0 {
+						logFilename(fmt.Sprintf("%d migrations applied before failure.", applied))
+					}
+					return errors.Wrapf(err, currName)
+				}
+			}
+			if _, err := tx.ExecContext(ctx, c.adapter.InsertNewVersion(schema), currVer); err != nil {
+				tx.Rollback()
+				return errors.Wrapf(err, "fail to register version %q", currVer)
+			}
+
+			if err := tx.Commit(); err != nil {
+				if err.Error() != "pq: unexpected transaction status idle" {
+					return errors.Wrapf(err, "unable to commit transaction for %s", currName)
+				}
+			}
+		}
+		logFilename(currName)
+		applied++
+	}
+	return nil
+}
+
+// migrateUpNoTx runs all migrations without any transaction wrapping
+func (c *Config) migrateUpNoTx(ctx context.Context, schema *string, logFilename func(string), pendingFiles []string) error {
+	applied := 0
+	for _, currName := range pendingFiles {
+		currVer := strings.Split(currName, "_")[0]
+
+		filecontent, err := c.fileContent(currName)
+		if err != nil {
+			return errors.Wrapf(err, currName)
+		}
+
+		if len(bytes.TrimSpace(filecontent)) > 0 {
+			if _, err := c.db.ExecContext(ctx, string(filecontent)); err != nil {
+				if applied > 0 {
+					logFilename(fmt.Sprintf("%d migrations applied before failure.", applied))
+				}
+				return errors.Wrapf(err, currName)
+			}
+		}
+		if _, err := c.db.ExecContext(ctx, c.adapter.InsertNewVersion(schema), currVer); err != nil {
+			return errors.Wrapf(err, "fail to register version %q", currVer)
+		}
+		logFilename(currName)
+		applied++
+	}
+	return nil
 }
 
 // MigrateDown un-applies at most N migrations in descending order, in a transaction
@@ -241,45 +440,76 @@ func (c *Config) MigrateUp(ctx context.Context, txOpts *sql.TxOptions, schema *s
 // Transaction is committed on success, rollback on error. Different databases will behave
 // differently, e.g. postgres & sqlite3 can rollback DDL changes but mysql cannot
 func (c *Config) MigrateDown(ctx context.Context, txOpts *sql.TxOptions, schema *string, logFilename func(string), downStep int) error {
+	return c.MigrateDownWithMode(ctx, txOpts, schema, logFilename, downStep, DbTxnModeAll)
+}
+
+// MigrateDownWithMode un-applies migrations with the specified transaction mode
+func (c *Config) MigrateDownWithMode(ctx context.Context, txOpts *sql.TxOptions, schema *string, logFilename func(string), downStep int, mode DbTxnMode) error {
 	migratedVersions, err := c.existingVersions(ctx, schema)
 	if err != nil {
 		return errors.Wrapf(err, "unable to query existing versions")
 	}
-
-	tx, err := c.adapter.BeginTx(ctx, c.db, txOpts)
-	if err != nil {
-		return errors.Wrapf(err, "unable to create transaction")
-	}
-	defer tx.Rollback() // ok to fail rollback if we did `tx.Commit`
 
 	migrationFiles := c.migrationFiles
 	sort.SliceStable(migrationFiles, func(i int, j int) bool {
 		return strings.Compare(migrationFiles[i], migrationFiles[j]) == 1 // descending order
 	})
 
+	// Collect applicable down files
+	var downFiles []string
 	counted := 0
 	for i := range migrationFiles {
 		currName := migrationFiles[i]
 		if !strings.HasSuffix(currName, "down.sql") {
-			continue // skip if this isn't a `down.sql`
+			continue
 		}
 		currVer := strings.Split(currName, "_")[0]
 		if _, found := migratedVersions.Find(currVer); !found {
-			continue // skip if we've NOT migrated this version
+			continue
 		}
 		counted++
 		if counted > downStep {
-			break // time to stop
+			break
 		}
+		downFiles = append(downFiles, currName)
+	}
 
-		// read the file, run the sql and delete row from `dbmigrate_versions`
+	// Validate transaction mode compatibility
+	if err := validateDbTxnMode(downFiles, mode); err != nil {
+		return err
+	}
+
+	// Dispatch to appropriate strategy
+	switch mode {
+	case DbTxnModeAll:
+		return c.migrateDownAll(ctx, txOpts, schema, logFilename, downFiles)
+	case DbTxnModePerFile:
+		return c.migrateDownPerFile(ctx, txOpts, schema, logFilename, downFiles)
+	case DbTxnModeNone:
+		return c.migrateDownNoTx(ctx, schema, logFilename, downFiles)
+	default:
+		return errors.Errorf("unknown transaction mode: %s", mode)
+	}
+}
+
+// migrateDownAll runs all down migrations in a single transaction
+func (c *Config) migrateDownAll(ctx context.Context, txOpts *sql.TxOptions, schema *string, logFilename func(string), downFiles []string) error {
+	tx, err := c.adapter.BeginTx(ctx, c.db, txOpts)
+	if err != nil {
+		return errors.Wrapf(err, "unable to create transaction")
+	}
+	defer tx.Rollback()
+
+	for _, currName := range downFiles {
+		currVer := strings.Split(currName, "_")[0]
+
 		filecontent, err := c.fileContent(currName)
 		if err != nil {
 			return errors.Wrapf(err, currName)
 		}
 
 		if len(bytes.TrimSpace(filecontent)) == 0 {
-			// treat empty file as success; don't run it
+			// treat empty file as success
 		} else if _, err := tx.ExecContext(ctx, string(filecontent)); err != nil {
 			return errors.Wrapf(err, currName)
 		}
@@ -288,11 +518,95 @@ func (c *Config) MigrateDown(ctx context.Context, txOpts *sql.TxOptions, schema 
 		}
 		logFilename(currName)
 	}
+
 	err = tx.Commit()
 	if err != nil && err.Error() == "pq: unexpected transaction status idle" {
-		return nil // ignore this error; already commited
+		return nil
 	}
 	return errors.Wrapf(err, "unable to commit transaction")
+}
+
+// migrateDownPerFile runs each down migration in its own transaction
+func (c *Config) migrateDownPerFile(ctx context.Context, txOpts *sql.TxOptions, schema *string, logFilename func(string), downFiles []string) error {
+	applied := 0
+	for _, currName := range downFiles {
+		currVer := strings.Split(currName, "_")[0]
+
+		filecontent, err := c.fileContent(currName)
+		if err != nil {
+			return errors.Wrapf(err, currName)
+		}
+
+		if requiresNoTransaction(currName) {
+			if len(bytes.TrimSpace(filecontent)) > 0 {
+				if _, err := c.db.ExecContext(ctx, string(filecontent)); err != nil {
+					if applied > 0 {
+						logFilename(fmt.Sprintf("%d migrations rolled back before failure.", applied))
+					}
+					return errors.Wrapf(err, currName)
+				}
+			}
+			if _, err := c.db.ExecContext(ctx, c.adapter.DeleteOldVersion(schema), currVer); err != nil {
+				return errors.Wrapf(err, "fail to unregister version %q", currVer)
+			}
+		} else {
+			tx, err := c.adapter.BeginTx(ctx, c.db, txOpts)
+			if err != nil {
+				return errors.Wrapf(err, "unable to create transaction for %s", currName)
+			}
+
+			if len(bytes.TrimSpace(filecontent)) > 0 {
+				if _, err := tx.ExecContext(ctx, string(filecontent)); err != nil {
+					tx.Rollback()
+					if applied > 0 {
+						logFilename(fmt.Sprintf("%d migrations rolled back before failure.", applied))
+					}
+					return errors.Wrapf(err, currName)
+				}
+			}
+			if _, err := tx.ExecContext(ctx, c.adapter.DeleteOldVersion(schema), currVer); err != nil {
+				tx.Rollback()
+				return errors.Wrapf(err, "fail to unregister version %q", currVer)
+			}
+
+			if err := tx.Commit(); err != nil {
+				if err.Error() != "pq: unexpected transaction status idle" {
+					return errors.Wrapf(err, "unable to commit transaction for %s", currName)
+				}
+			}
+		}
+		logFilename(currName)
+		applied++
+	}
+	return nil
+}
+
+// migrateDownNoTx runs all down migrations without transaction
+func (c *Config) migrateDownNoTx(ctx context.Context, schema *string, logFilename func(string), downFiles []string) error {
+	applied := 0
+	for _, currName := range downFiles {
+		currVer := strings.Split(currName, "_")[0]
+
+		filecontent, err := c.fileContent(currName)
+		if err != nil {
+			return errors.Wrapf(err, currName)
+		}
+
+		if len(bytes.TrimSpace(filecontent)) > 0 {
+			if _, err := c.db.ExecContext(ctx, string(filecontent)); err != nil {
+				if applied > 0 {
+					logFilename(fmt.Sprintf("%d migrations rolled back before failure.", applied))
+				}
+				return errors.Wrapf(err, currName)
+			}
+		}
+		if _, err := c.db.ExecContext(ctx, c.adapter.DeleteOldVersion(schema), currVer); err != nil {
+			return errors.Wrapf(err, "fail to unregister version %q", currVer)
+		}
+		logFilename(currName)
+		applied++
+	}
+	return nil
 }
 
 func (c *Config) fileContent(currName string) ([]byte, error) {

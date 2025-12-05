@@ -39,6 +39,7 @@ func _main() error {
 		databaseURL       string
 		driverName        string
 		timeout           time.Duration
+		dbTxnMode         string
 		errctx            error
 	)
 
@@ -64,6 +65,8 @@ func _main() error {
 		"driver", os.Getenv("DATABASE_DRIVER"), "drivername, e.g. postgres")
 	flag.DurationVar(&timeout,
 		"timeout", 5*time.Minute, "database timeout")
+	flag.StringVar(&dbTxnMode,
+		"db-txn-mode", "all", "transaction mode: all (default, existing behavior), per-file, or none")
 	flag.Parse()
 
 	// 1. CREATE new migration; exit
@@ -156,12 +159,20 @@ func _main() error {
 
 	// 3. MIGRATE UP; exit
 	if doMigrateUp {
-		return m.MigrateUp(ctx, &sql.TxOptions{}, dbSchema, filenameLogger("[up]"))
+		mode, err := dbmigrate.ParseDbTxnMode(dbTxnMode)
+		if err != nil {
+			return err
+		}
+		return m.MigrateUpWithMode(ctx, &sql.TxOptions{}, dbSchema, filenameLogger("[up]"), mode)
 	}
 
 	// 4. MIGRATE DOWN; exit
 	if doMigrateDown > 0 {
-		return m.MigrateDown(ctx, &sql.TxOptions{}, dbSchema, filenameLogger("[down]"), doMigrateDown)
+		mode, err := dbmigrate.ParseDbTxnMode(dbTxnMode)
+		if err != nil {
+			return err
+		}
+		return m.MigrateDownWithMode(ctx, &sql.TxOptions{}, dbSchema, filenameLogger("[down]"), doMigrateDown, mode)
 	}
 
 	// None of the above, fail
