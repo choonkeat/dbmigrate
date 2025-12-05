@@ -220,6 +220,18 @@ generate a pair of blank `.up.sql` and `.down.sql` files inside the directory `d
 
 the numeric prefix of the filename is the `version`. i.e. the version of the file above is `20181221083313`
 
+### Create a non-transactional migration
+
+For operations that cannot run inside a transaction (e.g., `CREATE INDEX CONCURRENTLY` in PostgreSQL), use the `-create-no-db-txn` flag:
+
+```
+$ dbmigrate -create-no-db-txn add index concurrently
+2024/01/15 10:30:00 writing db/migrations/20240115103000_add-index-concurrently.no-db-txn.up.sql
+2024/01/15 10:30:00 writing db/migrations/20240115103000_add-index-concurrently.no-db-txn.down.sql
+```
+
+Files with `.no-db-txn.` in the filename will be executed outside of any transaction, regardless of the `-db-txn-mode` setting.
+
 ### Migrate up
 
 ```
