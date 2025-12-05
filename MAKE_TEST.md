@@ -19,15 +19,9 @@
    }
    ```
 
-3. **Ensure port 65500 is free** - All tests use port 65500. Check with:
+3. **Ensure port 65500 is free** - All tests use port 65500. The test script automatically stops any container using this port before starting, but you can check manually with:
    ```bash
    lsof -i :65500
-   ```
-
-4. **Clean up stale containers** before running tests:
-   ```bash
-   docker ps -q | xargs -r docker stop
-   docker ps -aq | xargs -r docker rm
    ```
 
 ## Database Drivers Tested
@@ -37,20 +31,30 @@ The Makefile tests these drivers in order:
 2. `sqlite3`
 3. `postgres`
 4. `mariadb` (uses mysql driver)
-5. `mysql`
+5. `mysql` (MySQL 9.x with `caching_sha2_password` authentication)
 
 ## Running Tests
 
 ```bash
-# Full test suite
+# Full test suite (default 180s timeout)
 make test
 
 # Test a single driver
 DATABASE_DRIVER=postgres bash -euxo pipefail tests/withdb.sh tests/scenario.sh
 
+# Test with shorter timeout for faster iteration
+SERVER_READY=60s DATABASE_DRIVER=mariadb bash -euxo pipefail tests/withdb.sh tests/scenario.sh
+
 # Test without Docker (sqlite3 only)
 DATABASE_DRIVER=sqlite3 bash -euxo pipefail tests/withdb.sh tests/scenario.sh
 ```
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DATABASE_DRIVER` | (required) | Which driver to test: `cql`, `sqlite3`, `postgres`, `mariadb`, `mysql` |
+| `SERVER_READY` | `180s` | How long to wait for database to be ready |
 
 ## Container Startup Times
 
@@ -60,43 +64,19 @@ Different databases take different amounts of time to start:
 |------------|---------------------|-------|
 | Cassandra  | 45-60 seconds       | Slowest to start |
 | PostgreSQL | 5-10 seconds        | Fast |
-| MariaDB    | 10-20 seconds       | Medium |
-| MySQL      | 10-20 seconds       | Medium |
+| MariaDB    | 5-10 seconds        | Fast |
+| MySQL 9    | 5-10 seconds        | Fast |
 | SQLite     | Instant             | No container needed |
 
-The tests use `-server-ready 60s` to wait for database readiness.
+The tests use `-server-ready ${SERVER_READY}` (default 180s) to wait for database readiness. This gives plenty of headroom for slow container starts.
 
-## Known Issues
+## Automatic Cleanup
 
-### Flaky Tests Due to Docker Timing
+The test script automatically:
+1. **Stops any container using port 65500** before starting a new one
+2. **Cleans up containers on exit** using the `--rm` flag
 
-Tests may fail intermittently if Docker containers don't start in time. Common symptoms:
-- "connection refused" errors
-- Timeout after 60 seconds waiting for database
-
-**Solution**: Re-run the tests. Ensure no other containers are using port 65500.
-
-### Nil Pointer Panic on Timeout
-
-If the database connection times out, you may see:
-```
-panic: runtime error: invalid memory address or nil pointer dereference
-[signal SIGSEGV: segmentation violation code=0x2 addr=0x18 pc=0x...]
-
-goroutine 1 [running]:
-main._main()
-    .../cmd/dbmigrate/main.go:101 +0x6f8
-```
-
-This is a pre-existing bug where `errctx` is nil when `ReadyWait` times out. The root cause is a Docker container that failed to start, not a code bug in the migration logic.
-
-### Container Cleanup Issues
-
-The test script uses `--rm` flag, so containers auto-remove. If tests fail mid-run, you may need to manually clean up:
-```bash
-docker stop $(docker ps -q)
-rm -f cid.txt
-```
+You generally don't need to manually clean up between test runs.
 
 ## Verifying Test Results
 
@@ -134,4 +114,26 @@ Look for `[PASS]` markers in the output. A successful run shows:
    DATABASE_DRIVER=sqlite3 bash -euxo pipefail tests/withdb.sh tests/scenario.sh
    ```
 
-3. **Skip slow drivers** - Cassandra is the slowest. For quick iteration, test sqlite3 and postgres first.
+3. **Use shorter timeout** for databases that start quickly:
+   ```bash
+   SERVER_READY=60s DATABASE_DRIVER=postgres bash -euxo pipefail tests/withdb.sh tests/scenario.sh
+   ```
+
+4. **Skip slow drivers** - Cassandra is the slowest. For quick iteration, test sqlite3 and postgres first.
+
+## Troubleshooting
+
+### Container won't start
+
+If a container fails to start, check Docker logs:
+```bash
+docker logs $(cat cid.txt)
+```
+
+### Manual cleanup
+
+If tests fail mid-run and leave containers running:
+```bash
+docker ps -q --filter "publish=65500" | xargs -r docker stop
+rm -f cid.txt
+```
