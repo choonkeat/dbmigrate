@@ -48,3 +48,166 @@ assert_equal "tests/db/${DATABASE_DRIVER}/VERSIONS-06.after-down-1" $PENDING_VER
 # should assert against a db dump here
 assert "should migrate down until nothing" ${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -down 999 2>/dev/null
 assert_equal "tests/db/${DATABASE_DRIVER}/VERSIONS-07.after-down-999" "${PENDING_VERSIONS}" ${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -versions-pending
+
+# Test -db-txn-mode behaviors
+# First, apply all regular migrations
+assert "apply all migrations for txn-mode tests" ${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -up 2>/dev/null
+
+# Create a .no-db-txn. migration (empty files work across all drivers)
+touch ${DB_MIGRATIONS_DIR}/20991231235959_test-no-txn.no-db-txn.up.sql
+touch ${DB_MIGRATIONS_DIR}/20991231235959_test-no-txn.no-db-txn.down.sql
+
+# Should fail with default mode (all) when .no-db-txn. files exist
+assert_fail "should fail with -db-txn-mode=all when .no-db-txn. files pending" ${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -up 2>&1
+
+# Should succeed with -db-txn-mode=per-file
+assert "should succeed with -db-txn-mode=per-file" ${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -db-txn-mode=per-file -up 2>/dev/null
+
+# Migrate down and test -db-txn-mode=none
+assert "migrate down the no-txn migration" ${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -db-txn-mode=per-file -down 1 2>/dev/null
+
+# Should also succeed with -db-txn-mode=none
+assert "should succeed with -db-txn-mode=none" ${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -db-txn-mode=none -up 2>/dev/null
+
+# Clean up: migrate everything down
+assert "final cleanup - migrate down all" ${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -db-txn-mode=per-file -down 999 2>/dev/null
+
+# Test -db-txn-mode transaction behavior differences
+# Same setup, three different outcomes based on mode
+# Note: CQL (Cassandra) doesn't support transactions, so skip these tests
+#
+# Expected behavior:
+#   -db-txn-mode=all:      txn-first=NO,  txn-second=NO  (all rolled back) - sqlite3 postgres mariadb mysql
+#   -db-txn-mode=per-file: txn-first=YES, txn-second=NO  (file 2 rolled back) - sqlite3 postgres mariadb mysql
+#   -db-txn-mode=none:     txn-first=YES, txn-second=??? (driver-dependent partial state)
+#     - sqlite3:  txn-second=YES (executes statements independently)
+#     - postgres: txn-second=NO  (executes multi-statement SQL atomically)
+#     - mysql:    txn-second=YES (with multiStatements=true, executes independently)
+#     - mariadb:  txn-second=YES (same as mysql)
+
+if [ "$DATABASE_DRIVER" = "cql" ]; then
+    pass "skipping txn-mode behavior tests for cql (no transaction support)"
+else
+
+# Helper to check if a row exists in products table (returns count)
+check_row_count() {
+    local name=$1
+    case $DATABASE_DRIVER in
+        sqlite3)
+            sqlite3 "${DATABASE_URL}" "SELECT COUNT(*) FROM products WHERE name='${name}';" 2>/dev/null || echo "0"
+            ;;
+        postgres)
+            docker exec $(cat cid.txt) psql -U postgres -d dbmigrate_test -t -c "SELECT COUNT(*) FROM products WHERE name='${name}';" 2>/dev/null | tr -d ' \t\r\n' || echo "0"
+            ;;
+        mysql)
+            # Try mysql first (mysql image), then mariadb (mariadb image)
+            # Use 2>&1 and grep to filter only numeric results (ignores docker error messages)
+            (docker exec $(cat cid.txt) /usr/bin/mysql -u root -ppassword dbmigrate_test -N -e "SELECT COUNT(*) FROM products WHERE name='${name}';" 2>&1 || \
+             docker exec $(cat cid.txt) /usr/bin/mariadb -u root -ppassword dbmigrate_test -N -e "SELECT COUNT(*) FROM products WHERE name='${name}';" 2>&1) | grep -E '^[0-9]+$' | tail -1 || echo "0"
+            ;;
+    esac
+}
+
+# Helper to setup txn-mode test migrations
+setup_txn_test() {
+    rm -f ${DB_MIGRATIONS_DIR}/2099*
+    # Migration 1: single successful INSERT
+    cat > ${DB_MIGRATIONS_DIR}/20990101000001_txn-test-first.up.sql << 'SQLEOF'
+INSERT INTO products (name, price) VALUES ('txn-first', 100);
+SQLEOF
+    cat > ${DB_MIGRATIONS_DIR}/20990101000001_txn-test-first.down.sql << 'SQLEOF'
+DELETE FROM products WHERE name = 'txn-first';
+SQLEOF
+    # Migration 2: successful INSERT then fails on nonexistent table
+    cat > ${DB_MIGRATIONS_DIR}/20990101000002_txn-test-second.up.sql << 'SQLEOF'
+INSERT INTO products (name, price) VALUES ('txn-second', 200);
+INSERT INTO nonexistent_table VALUES (1);
+SQLEOF
+    cat > ${DB_MIGRATIONS_DIR}/20990101000002_txn-test-second.down.sql << 'SQLEOF'
+DELETE FROM products WHERE name = 'txn-second';
+SQLEOF
+}
+
+# Setup: base table
+rm -f ${DB_MIGRATIONS_DIR}/2099*
+cp tests/db/${DATABASE_DRIVER}/20181222073546_create-products.* ${DB_MIGRATIONS_DIR}/
+assert "txn-test: create base table" ${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -up 2>/dev/null
+
+# Test 1: -db-txn-mode=all - both migrations should be rolled back
+setup_txn_test
+assert_fail "all: should fail on bad migration" ${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -db-txn-mode=all -up 2>&1
+ALL_PENDING=$(${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -versions-pending 2>/dev/null)
+if echo "$ALL_PENDING" | grep -q "20990101000001" && echo "$ALL_PENDING" | grep -q "20990101000002"; then
+    pass "all: both migrations rolled back (both pending)"
+else
+    fail "all: expected both migrations to be pending after rollback"
+    echo "Pending: $ALL_PENDING"
+    exit 1
+fi
+# Verify actual data: txn-first should NOT exist (rolled back)
+ALL_FIRST_COUNT=$(check_row_count "txn-first")
+if [ "$ALL_FIRST_COUNT" = "0" ]; then
+    pass "all: txn-first row does NOT exist (rolled back)"
+else
+    fail "all: txn-first row should NOT exist, but count=$ALL_FIRST_COUNT"
+    exit 1
+fi
+
+# Test 2: -db-txn-mode=per-file - migration 1 applied, migration 2 rolled back
+setup_txn_test
+assert_fail "per-file: should fail on bad migration" ${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -db-txn-mode=per-file -up 2>&1
+PERFILE_PENDING=$(${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -versions-pending 2>/dev/null)
+if echo "$PERFILE_PENDING" | grep -q "20990101000002" && ! echo "$PERFILE_PENDING" | grep -q "20990101000001"; then
+    pass "per-file: migration 1 applied, migration 2 pending"
+else
+    fail "per-file: expected only migration 2 to be pending"
+    echo "Pending: $PERFILE_PENDING"
+    exit 1
+fi
+# Verify actual data: txn-first EXISTS, txn-second does NOT exist
+PERFILE_FIRST_COUNT=$(check_row_count "txn-first")
+PERFILE_SECOND_COUNT=$(check_row_count "txn-second")
+if [ "$PERFILE_FIRST_COUNT" = "1" ] && [ "$PERFILE_SECOND_COUNT" = "0" ]; then
+    pass "per-file: txn-first=1, txn-second=0 (file 2 rolled back)"
+else
+    fail "per-file: expected txn-first=1, txn-second=0, but got txn-first=$PERFILE_FIRST_COUNT, txn-second=$PERFILE_SECOND_COUNT"
+    exit 1
+fi
+# Clean up migration 1 for next test
+${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -db-txn-mode=per-file -down 999 2>/dev/null || true
+
+# Test 3: -db-txn-mode=none - migration 1 applied, migration 2 partial (first INSERT applied)
+setup_txn_test
+assert_fail "none: should fail on bad migration" ${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -db-txn-mode=none -up 2>&1
+NONE_PENDING=$(${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -versions-pending 2>/dev/null)
+if echo "$NONE_PENDING" | grep -q "20990101000002" && ! echo "$NONE_PENDING" | grep -q "20990101000001"; then
+    pass "none: migration 1 applied, migration 2 pending (partial state)"
+else
+    fail "none: expected only migration 2 to be pending"
+    echo "Pending: $NONE_PENDING"
+    exit 1
+fi
+# Verify actual data: txn-first EXISTS, txn-second depends on driver behavior
+NONE_FIRST_COUNT=$(check_row_count "txn-first")
+NONE_SECOND_COUNT=$(check_row_count "txn-second")
+# postgres executes multi-statement SQL atomically, so txn-second=0
+# sqlite3/mysql execute statements independently, so txn-second=1
+case $DATABASE_DRIVER in
+    postgres)
+        EXPECTED_SECOND=0
+        ;;
+    *)
+        EXPECTED_SECOND=1
+        ;;
+esac
+if [ "$NONE_FIRST_COUNT" = "1" ] && [ "$NONE_SECOND_COUNT" = "$EXPECTED_SECOND" ]; then
+    pass "none: txn-first=1, txn-second=$EXPECTED_SECOND (driver-specific behavior)"
+else
+    fail "none: expected txn-first=1, txn-second=$EXPECTED_SECOND, but got txn-first=$NONE_FIRST_COUNT, txn-second=$NONE_SECOND_COUNT"
+    exit 1
+fi
+
+# Final cleanup
+${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -db-txn-mode=none -down 999 2>/dev/null || true
+
+fi # end of if [ "$DATABASE_DRIVER" != "cql" ]
