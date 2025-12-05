@@ -1,4 +1,4 @@
-# dbmigrate [![Build Status](https://travis-ci.com/choonkeat/dbmigrate.svg?branch=master)](https://travis-ci.com/choonkeat/dbmigrate)
+# dbmigrate [![Test](https://github.com/choonkeat/dbmigrate/actions/workflows/test.yml/badge.svg)](https://github.com/choonkeat/dbmigrate/actions/workflows/test.yml)
 
 `rails migrate` [inspired](https://blog.choonkeat.com/weblog/2019/05/database-schema-migration.html) approach to database schema migrations but with plain sql files. and much faster.
 

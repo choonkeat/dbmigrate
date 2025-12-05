@@ -1,0 +1,24 @@
+name: Test
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        database: [sqlite3, postgres, mysql, mariadb, cql]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Test ${{ matrix.database }}
+        run: make test DATABASE_DRIVERS="${{ matrix.database }}"
