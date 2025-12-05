@@ -1,14 +1,14 @@
 # Upgrade Guide
 
-## Upgrading to v2.0.0
+## Upgrading to v3.0.0
 
 This release introduces cross-process locking, configurable transaction modes, and support for `CREATE INDEX CONCURRENTLY`.
 
 ### Breaking Changes
 
-#### SQLite users must add `-no-lock` flag
+#### SQLite and CQL (Cassandra) users must add `-no-lock` flag
 
-dbmigrate now requires cross-process locking by default. Since SQLite does not support advisory locks, SQLite users must explicitly opt out:
+dbmigrate now requires cross-process locking by default. Since SQLite and CQL do not support advisory locks, users must explicitly opt out:
 
 ```bash
 # Before
@@ -18,7 +18,7 @@ dbmigrate -up
 dbmigrate -up -no-lock
 ```
 
-**Why this change?** Cross-process locking prevents race conditions when multiple processes run migrations concurrently (e.g., multi-node deployments). SQLite does not support this, so you must acknowledge this limitation explicitly.
+**Why this change?** Cross-process locking prevents race conditions when multiple processes run migrations concurrently (e.g., multi-node deployments). SQLite and CQL do not support advisory locks, so you must acknowledge this limitation explicitly.
 
 **When is `-no-lock` safe?**
 - Local development
@@ -138,15 +138,18 @@ No action required—this is informational only.
 | **SQLite** | Dev workflow | ❌ Blocked | **Yes** | Add `-no-lock` |
 | **SQLite** | CI | ❌ Blocked | **Yes** | Add `-no-lock` |
 | **SQLite** | Deployment | ❌ Blocked | **Yes** | Add `-no-lock` |
+| **CQL** | Dev workflow | ❌ Blocked | **Yes** | Add `-no-lock` |
+| **CQL** | CI | ❌ Blocked | **Yes** | Add `-no-lock` |
+| **CQL** | Deployment | ❌ Blocked | **Yes** | Add `-no-lock` |
 
 #### By Workflow Type
 
-| Workflow | PostgreSQL | MySQL | SQLite |
-|----------|------------|-------|--------|
-| **Dev (local)** | No change | Warning printed | Add `-no-lock` |
-| **CI pipeline** | No change | Warning in logs | Update CI script |
-| **Docker/K8s** | No change | Warning printed | Update Dockerfile/manifest |
-| **Multi-node boot** | Improved (locking!) | Improved (locking!) | N/A (use `-no-lock`) |
+| Workflow | PostgreSQL | MySQL | SQLite | CQL |
+|----------|------------|-------|--------|-----|
+| **Dev (local)** | No change | Warning printed | Add `-no-lock` | Add `-no-lock` |
+| **CI pipeline** | No change | Warning in logs | Update CI script | Update CI script |
+| **Docker/K8s** | No change | Warning printed | Update Dockerfile/manifest | Update Dockerfile/manifest |
+| **Multi-node boot** | Improved (locking!) | Improved (locking!) | N/A (use `-no-lock`) | N/A (use `-no-lock`) |
 
 ### Upgrade Checklist
 
@@ -155,10 +158,11 @@ No action required—this is informational only.
 | PostgreSQL | None |
 | MySQL | None (read the new DDL warning) |
 | SQLite | Add `-no-lock` to all dbmigrate commands |
+| CQL | Add `-no-lock` to all dbmigrate commands |
 
 ### Error Recovery
 
-#### "sqlite3 does not support cross-process locking"
+#### "sqlite3 does not support cross-process locking" / "cql does not support cross-process locking"
 
 Add `-no-lock` flag:
 ```bash
@@ -183,7 +187,7 @@ Another migration process is running. Either:
 
 **Q: Will my existing migrations still work?**
 
-Yes. If you're using PostgreSQL or MySQL, everything works as before with the added benefit of locking. SQLite users need to add `-no-lock`.
+Yes. If you're using PostgreSQL or MySQL, everything works as before with the added benefit of locking. SQLite and CQL users need to add `-no-lock`.
 
 **Q: Do I need to change my migration files?**
 

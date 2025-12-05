@@ -348,3 +348,28 @@ The SQL command `CREATE DATABASE <dbname>` does not work well (at least in postg
 
 The workaround is, if `-create-db` is needed, use underscore `_` for your dbname instead of dashes `-`
 
+---
+
+## Upgrading from v2.x to v3.0.0
+
+v3.0.0 introduces cross-process locking, configurable transaction modes, and support for `CREATE INDEX CONCURRENTLY`.
+
+### What's Changed
+
+**PostgreSQL and MySQL users**: No changes required—everything works as before, with automatic locking.
+
+**SQLite and CQL users** need a small update:
+- CLI: Add `-no-lock` flag (e.g., `dbmigrate -up -no-lock`)
+- Library: Use `MigrateUpWithMode`/`MigrateDownWithMode` with `noLock=true`
+
+**Custom adapter authors**: Add `SupportsLocking`, `AcquireLock`, `ReleaseLock` fields.
+
+### New Features
+
+- **Cross-process locking** (PostgreSQL, MySQL): Prevents race conditions when multiple processes run migrations
+- **Transaction modes** (`-db-txn-mode`): Control transaction wrapping (`all`, `per-file`, `none`)
+- **`.no-db-txn.` marker**: Support for `CREATE INDEX CONCURRENTLY` and other non-transactional DDL
+- **MySQL DDL warning**: Informational warning about MySQL's implicit commits
+
+**⚠️ Please read [UPGRADE.md](UPGRADE.md) for complete upgrade instructions, migration scenarios, error recovery, and FAQ.**
+
