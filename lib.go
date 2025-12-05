@@ -107,6 +107,16 @@ func validateDbTxnMode(files []string, mode DbTxnMode) error {
 	return nil
 }
 
+// warnMySQLDDL prints a warning about MySQL DDL limitations
+func warnMySQLDDL(driverName string, log func(string)) {
+	if driverName != "mysql" {
+		return
+	}
+	log("Warning: MySQL does not support transactional DDL.")
+	log("         DDL statements (CREATE, ALTER, DROP) commit implicitly.")
+	log("         Transaction mode has limited effect on DDL-heavy migrations.")
+}
+
 // RequireDriverName to indicate explicit driver name
 var RequireDriverName = errors.Errorf("Cannot discern db driver. Please set -driver flag or DATABASE_DRIVER environment variable.")
 
@@ -348,6 +358,9 @@ func (c *Config) MigrateUpWithMode(ctx context.Context, txOpts *sql.TxOptions, s
 	}
 	defer c.releaseLock(ctx, conn, schema)
 
+	// MySQL DDL warning
+	warnMySQLDDL(c.driverName, logFilename)
+
 	migratedVersions, err := c.existingVersions(ctx, schema)
 	if err != nil {
 		return errors.Wrapf(err, "unable to query existing versions")
@@ -526,6 +539,9 @@ func (c *Config) MigrateDownWithMode(ctx context.Context, txOpts *sql.TxOptions,
 		return err
 	}
 	defer c.releaseLock(ctx, conn, schema)
+
+	// MySQL DDL warning
+	warnMySQLDDL(c.driverName, logFilename)
 
 	migratedVersions, err := c.existingVersions(ctx, schema)
 	if err != nil {

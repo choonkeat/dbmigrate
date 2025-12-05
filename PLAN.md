@@ -3,7 +3,7 @@
 This plan implements 3 changes in small, testable steps:
 1. ✅ `.no-db-txn.` filename marker + `-db-txn-mode` flag
 2. ✅ Cross-process locking with `-no-lock` opt-out
-3. MySQL DDL warning
+3. ✅ MySQL DDL warning
 
 ---
 
@@ -1352,7 +1352,7 @@ make test
 
 ---
 
-## Phase 3: MySQL DDL Warning
+## Phase 3: MySQL DDL Warning ✅ COMPLETE
 
 ### Step 3.1: Add MySQL DDL warning function
 
@@ -1442,6 +1442,18 @@ make test
 ```
 
 All drivers should pass, and MySQL/MariaDB output should include the DDL warning.
+
+### Phase 3 Completion Notes
+
+**Implementation details:**
+- Added `warnMySQLDDL` function in lib.go
+- Called in both `MigrateUpWithMode` and `MigrateDownWithMode` after acquiring lock
+- Warning printed for mysql driver only (mariadb also uses mysql driver)
+
+**Test verification:**
+- MySQL tests verify warning is shown: `[PASS] mysql: DDL warning shown`
+- PostgreSQL tests verify warning is NOT shown: `[PASS] postgres: DDL warning correctly NOT shown`
+- Tests serve as living documentation that MySQL DDL warning is displayed
 
 ---
 

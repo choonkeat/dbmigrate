@@ -329,3 +329,52 @@ ${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -down 999 2>/dev/null || true
 rm -f /tmp/migrate*.log
 
 fi # end of concurrent locking test
+
+# Test MySQL DDL warning
+# MySQL should show the warning, other drivers should not
+if [ "$DATABASE_DRIVER" = "mysql" ]; then
+    # Setup: clean state
+    rm -f ${DB_MIGRATIONS_DIR}/2099*
+    cp tests/db/${DATABASE_DRIVER}/20181222073546_create-products.* ${DB_MIGRATIONS_DIR}/
+    ${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -down 999 2>/dev/null || true
+
+    # Run migration and capture output
+    ${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -up > /tmp/mysql_ddl_test.log 2>&1
+
+    # Verify warning appears
+    if grep -q "MySQL does not support transactional DDL" /tmp/mysql_ddl_test.log; then
+        pass "mysql: DDL warning shown"
+    else
+        fail "mysql: DDL warning NOT shown (expected warning)"
+        cat /tmp/mysql_ddl_test.log
+        exit 1
+    fi
+
+    # Cleanup
+    ${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -down 999 2>/dev/null || true
+    rm -f /tmp/mysql_ddl_test.log
+fi
+
+# For postgres, verify warning does NOT appear
+if [ "$DATABASE_DRIVER" = "postgres" ]; then
+    # Setup: clean state
+    rm -f ${DB_MIGRATIONS_DIR}/2099*
+    cp tests/db/${DATABASE_DRIVER}/20181222073546_create-products.* ${DB_MIGRATIONS_DIR}/
+    ${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -down 999 2>/dev/null || true
+
+    # Run migration and capture output
+    ${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -up > /tmp/postgres_ddl_test.log 2>&1
+
+    # Verify warning does NOT appear
+    if grep -q "MySQL does not support transactional DDL" /tmp/postgres_ddl_test.log; then
+        fail "postgres: DDL warning shown (should NOT appear for postgres)"
+        cat /tmp/postgres_ddl_test.log
+        exit 1
+    else
+        pass "postgres: DDL warning correctly NOT shown"
+    fi
+
+    # Cleanup
+    ${DBMIGRATE_CMD} -dir ${DB_MIGRATIONS_DIR} -down 999 2>/dev/null || true
+    rm -f /tmp/postgres_ddl_test.log
+fi
