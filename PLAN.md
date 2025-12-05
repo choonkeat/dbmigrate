@@ -1,13 +1,13 @@
 # Implementation Plan: Transaction Modes, Locking, and MySQL DDL Warning
 
 This plan implements 3 changes in small, testable steps:
-1. `.no-db-txn.` filename marker + `-db-txn-mode` flag
+1. ✅ `.no-db-txn.` filename marker + `-db-txn-mode` flag
 2. Cross-process locking with `-no-lock` opt-out
 3. MySQL DDL warning
 
 ---
 
-## Phase 1: `.no-db-txn.` Detection and `-db-txn-mode` Flag
+## Phase 1: `.no-db-txn.` Detection and `-db-txn-mode` Flag ✅ COMPLETE
 
 ### Step 1.1: Verify `make test` passes (baseline)
 
@@ -782,6 +782,16 @@ if doMigrateDown > 0 {
 go build ./cmd/dbmigrate
 ./cmd/dbmigrate/dbmigrate -help  # should show -db-txn-mode flag
 ```
+
+### Phase 1 Completion Notes
+
+**Additional work beyond original plan:**
+- Added `check_row_count()` helper in `tests/scenario.sh` to verify actual data state
+- Tests now verify both `schema_migrations` table AND actual row data for `txn-first`/`txn-second`
+- Added `test-clean` target to Makefile for cleanup between test runs
+- Documented driver-specific behavior for `-db-txn-mode=none`:
+  - sqlite3/mysql/mariadb: `txn-second=YES` (execute statements independently)
+  - postgres: `txn-second=NO` (executes multi-statement SQL atomically)
 
 ---
 
