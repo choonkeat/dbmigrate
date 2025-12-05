@@ -23,3 +23,15 @@ build-docker:
 publish-docker: build-docker
 	docker tag dbmigrate:latest choonkeat/dbmigrate
 	docker push choonkeat/dbmigrate
+
+release:
+ifndef RELEASE_VERSION
+	$(error RELEASE_VERSION is required. Usage: make release RELEASE_VERSION=3.0.1)
+endif
+	git diff --quiet || (echo "Error: uncommitted changes. Commit or stash first." && exit 1)
+	git push origin master
+	git tag v$(RELEASE_VERSION)
+	git push origin v$(RELEASE_VERSION)
+	@echo ""
+	@echo "Released v$(RELEASE_VERSION)"
+	@echo "Docker image will be built by GitHub Actions: choonkeat/dbmigrate:$(RELEASE_VERSION)"
